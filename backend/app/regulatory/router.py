@@ -27,6 +27,26 @@ from .test_plan_generator import generate_regulatory_test_plan, RegulatoryTestPl
 from .sources import REGULATORY_REGISTRY
 from .config import get_manual_review_checklist, get_default_config
 
+# High-level clean API service functions for Person 1
+from .api import (
+    validate_instrument_api,
+    calculate_mpe_api,
+    determine_applicable_tests_api,
+    generate_test_plan_api,
+    get_regulatory_profile_api,
+    get_rule_or_source_api,
+    RegulatoryAPI,
+)
+
+# Function aliases matching endpoint operations
+api_validate_instrument = validate_instrument_api
+api_mpe = calculate_mpe_api
+api_determine_applicable_tests = determine_applicable_tests_api
+api_test_plan = generate_test_plan_api
+api_get_profile = get_regulatory_profile_api
+api_get_rule = get_rule_or_source_api
+dispatch = RegulatoryAPI.dispatch
+
 
 # Pure python service functions for direct invocation by Person 1 or routers
 def api_validate_scales(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -201,6 +221,31 @@ try:
 
     router = APIRouter(prefix="/regulatory", tags=["Regulatory Engine"])
 
+    # =========================================================================
+    # Canonical Endpoints Requested for Person 1 Integration
+    # =========================================================================
+
+    @router.post("/validate-instrument")
+    def endpoint_validate_instrument(payload: Dict[str, Any] = Body(...)):
+        return validate_instrument_api(payload)
+
+    @router.post("/mpe")
+    def endpoint_mpe(payload: Dict[str, Any] = Body(...)):
+        return calculate_mpe_api(payload)
+
+    @router.post("/test-plan")
+    def endpoint_test_plan(payload: Dict[str, Any] = Body(...)):
+        return generate_test_plan_api(payload)
+
+    @router.get("/profile")
+    def endpoint_profile():
+        return get_regulatory_profile_api()
+
+    @router.get("/rules/{rule_id}")
+    def endpoint_rule_info(rule_id: str):
+        return get_rule_or_source_api(rule_id)
+
+    # Legacy and detailed helper endpoints
     @router.post("/validate-scales")
     def endpoint_validate_scales(payload: Dict[str, Any] = Body(...)):
         return api_validate_scales(payload)

@@ -125,6 +125,18 @@ from .classification_validator import (
     validate_classification,
 )
 
+from .api import (
+    validate_instrument_api,
+    calculate_mpe_api,
+    determine_applicable_tests_api,
+    generate_test_plan_api,
+    get_regulatory_profile_api,
+    get_rule_or_source_api,
+    RegulatoryAPI,
+    success_response,
+    error_response,
+)
+
 __all__ = [
     # Models
     "AccuracyClass",
@@ -221,4 +233,14 @@ __all__ = [
     "ClassificationValidationResult",
     "RegulatoryClassificationValidator",
     "validate_classification",
+    # API Layer & Facade (Person 1 Integration)
+    "validate_instrument_api",
+    "calculate_mpe_api",
+    "determine_applicable_tests_api",
+    "generate_test_plan_api",
+    "get_regulatory_profile_api",
+    "get_rule_or_source_api",
+    "RegulatoryAPI",
+    "success_response",
+    "error_response",
 ]

@@ -883,5 +883,466 @@ print(f"Calculated Test Loads: {plan.calculated_test_loads}")
 plan_dict = generate_regulatory_test_plan(spec)
 ```
 
+---
+
+## 12. Backend API Architecture & Endpoints
+
+This section defines the external API service layer for **Person 1 (Team Lead)** to integrate the Regulatory Engine into the MetrIQ backend architecture without importing internal submodules directly.
+
+### Integration for Person 1:
+```python
+# Clean single import for Person 1:
+from app.regulatory import (
+    validate_instrument_api,
+    calculate_mpe_api,
+    determine_applicable_tests_api,
+    generate_test_plan_api,
+    get_regulatory_profile_api,
+    get_rule_or_source_api,
+    RegulatoryAPI,
+)
+
+# Or import through the master router (app/api/router.py):
+from app.api.router import RegulatoryAPI
+```
+
+### Standard Response Envelope:
+All endpoints return consistent JSON envelopes:
+```json
+// Success Response:
+{
+  "success": true,
+  "status_code": 200,
+  "data": { ... },
+  "timestamp": "2026-09-17T01:05:00.000000+00:00"
+}
+
+// Error Response:
+{
+  "success": false,
+  "status_code": 400,
+  "error": {
+    "code": "ERROR_IDENTIFIER",
+    "message": "Human-readable explanation of error",
+    "details": [...]
+  },
+  "timestamp": "2026-09-17T01:05:00.000000+00:00"
+}
+```
+
+---
+
+### Endpoint 1: Validate Instrument
+`POST /regulatory/validate-instrument`
+
+Validates instrument metrological parameters against statutory OIML R 76-1:2006 Table 3 and Indian Legal Metrology (General) Rules, 2011 Seventh Schedule Table 1.
+
+#### Request Schema:
+| Field | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `accuracy_class` | string | **Yes** | Allowed: `"I"`, `"II"`, `"III"`, `"IIII"` |
+| `Max` | float | **Yes** | Maximum weighing capacity |
+| `Min` | float | No | Minimum capacity (defaults to statutory $20e$ or $10e$) |
+| `e` | float | **Yes** | Verification scale interval ($1, 2, 5 \times 10^k$) |
+| `d` | float | No | Actual scale interval ($d \le e$) |
+| `calculated_n` | int / float | No | Number of verification intervals ($n = \text{Max} / e$) |
+| `unit` | string | No | Legal unit: `"mg"`, `"g"`, `"kg"`, `"t"`, `"ct"` (default `"kg"`) |
+| `electronic_status`| bool | No | True for electronic, False for mechanical |
+| `multi_range_status` | bool | No | Multi-range architecture flag |
+| `multi_interval_status` | bool | No | Multi-interval architecture flag |
+
+#### Example Request:
+```json
+{
+  "accuracy_class": "III",
+  "Max": 15.0,
+  "Min": 0.1,
+  "e": 0.005,
+  "d": 0.005,
+  "calculated_n": 3000,
+  "unit": "kg"
+}
+```
+
+#### Example Response (200 OK):
+```json
+{
+  "success": true,
+  "status_code": 200,
+  "data": {
+    "valid": true,
+    "accuracy_class": "III",
+    "max_capacity": 15.0,
+    "min_capacity": 0.1,
+    "e": 0.005,
+    "d": 0.005,
+    "n": 3000,
+    "unit": "kg",
+    "errors": [],
+    "warnings": [],
+    "manual_review_required": false,
+    "manual_review_reasons": []
+  },
+  "timestamp": "2026-09-17T01:05:00.000000+00:00"
+}
+```
+
+#### Error Cases:
+- **400 Bad Request (`MISSING_REQUIRED_FIELD`):** Missing `accuracy_class`, `Max`, or `e`.
+- **422 Unprocessable Entity (`INVALID_FIELD_FORMAT`):** Non-numeric characters for `Max` or `e`.
+- **200 Evaluation Failure (`data.valid = false`):** Exceeds statutory limits (e.g. $n > 10,000$ for Class III or $Min > Max$). The errors array contains detailed `rule_id`, `actual_value`, and `expected_condition`.
+
+---
+
+### Endpoint 2: Calculate MPE
+`POST /regulatory/mpe`
+
+Calculates statutory Maximum Permissible Error (MPE) for any test load based on accuracy class and verification scale interval $e$. Supports observed error evaluation and subsequent verification ($2 \times \text{Initial}$).
+
+#### Request Schema:
+| Field | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `accuracy_class` | string | **Yes** | `"I"`, `"II"`, `"III"`, or `"IIII"` |
+| `load` | float | **Yes** | Applied test load |
+| `e` | float | **Yes** | Verification scale interval ($e > 0$) |
+| `verification_type`| string | No | `"INITIAL"` (default) or `"SUBSEQUENT"` / `"IN_SERVICE"` |
+| `observed_error` | float | No | Observed indication error $(I - L)$ to evaluate |
+| `unit` | string | No | Mass unit (default `"kg"`) |
+
+#### Example Request:
+```json
+{
+  "accuracy_class": "III",
+  "load": 2.5,
+  "e": 0.005,
+  "verification_type": "INITIAL",
+  "observed_error": 0.002,
+  "unit": "kg"
+}
+```
+
+#### Example Response (200 OK):
+```json
+{
+  "success": true,
+  "status_code": 200,
+  "data": {
+    "accuracy_class": "III",
+    "load": 2.5,
+    "unit": "kg",
+    "e": 0.005,
+    "verification_type": "INITIAL",
+    "load_in_e": 500.0,
+    "mpe_in_e": 0.5,
+    "mpe_absolute": 0.0025,
+    "tolerance_band": "0 <= m <= 500 e",
+    "lower_limit_error": -0.0025,
+    "upper_limit_error": 0.0025,
+    "applicable_rule": "0 <= m <= 500e -> MPE: +/-0.5e",
+    "source": "OIML R 76-1:2006 Table 6 / Seventh Schedule Table 2",
+    "observed_error": 0.002,
+    "is_pass": true,
+    "margin": 0.0005
+  },
+  "timestamp": "2026-09-17T01:05:00.000000+00:00"
+}
+```
+
+#### Error Cases:
+- **400 Bad Request (`MISSING_PARAMETER`):** Missing `accuracy_class`, `load`, or `e`.
+- **422 Unprocessable Entity (`INVALID_SCALE_INTERVAL`):** $e \le 0$.
+- **422 Unprocessable Entity (`MPE_CALCULATION_ERROR`):** Invalid accuracy class string.
+
+---
+
+### Endpoint 3: Determine Applicable Tests
+`POST /regulatory/applicable-tests`
+
+Determines which of the 22 statutory metrological tests apply to an instrument based on its physical and metrological characteristics.
+
+#### Request Schema:
+| Field | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `accuracy_class` | string | No | Class (`"I"`, `"II"`, `"III"`, `"IIII"`) |
+| `instrument_type` | string | No | `"SELF_INDICATING"` or `"NON_SELF_INDICATING"` |
+| `digital_analog` | string | No | `"DIGITAL"`, `"ANALOG"`, or `"BOTH"` |
+| `electronic_status`| bool | No | True for electronic, False for mechanical |
+| `zero_setting_device`| bool | No | Presence of zero-setting device |
+| `tare_device` | bool | No | Presence of tare mechanism |
+| `load_receptor` | string | No | `"STANDARD_PLATTER"`, `"ROLLING_LOAD"`, `"WEIGHBRIDGE"` |
+| `printing_data_storage`| bool | No | Data printing or storage facility |
+| `is_type_evaluation` | bool | No | True for Model Approval, False for verification |
+
+#### Example Request:
+```json
+{
+  "accuracy_class": "III",
+  "instrument_type": "SELF_INDICATING",
+  "digital_analog": "DIGITAL",
+  "electronic_status": true,
+  "zero_setting_device": true,
+  "tare_device": true,
+  "load_receptor": "STANDARD_PLATTER",
+  "printing_data_storage": true,
+  "is_type_evaluation": false
+}
+```
+
+#### Example Response (200 OK):
+```json
+{
+  "success": true,
+  "status_code": 200,
+  "data": {
+    "total_tests_evaluated": 22,
+    "applicable_count": 9,
+    "not_applicable_count": 13,
+    "manual_review_count": 4,
+    "applicable_tests": [
+      {
+        "test_id": "A.1",
+        "test_name": "Administrative Examination",
+        "source": "OIML R 76-1:2006 Clause A.1",
+        "applicable": true,
+        "manual_review": true,
+        "priority": 1
+      },
+      {
+        "test_id": "A.4.4",
+        "test_name": "Weighing Performance Test",
+        "source": "OIML R 76-1:2006 Clause A.4.4",
+        "applicable": true,
+        "manual_review": false,
+        "priority": 6
+      }
+    ],
+    "not_applicable_tests": [...],
+    "manual_review_tests": [...],
+    "warnings": [
+      "Printing/Data-storage enabled: mandatory manual examination of printout lockout during motion (A.4.12)."
+    ]
+  },
+  "timestamp": "2026-09-17T01:05:00.000000+00:00"
+}
+```
+
+#### Error Cases:
+- **400 Bad Request (`INVALID_REQUEST_PAYLOAD`):** Non-dictionary payload.
+
+---
+
+### Endpoint 4: Generate Test Plan
+`POST /regulatory/test-plan`
+
+Executes the complete 5-stage regulatory pipeline and generates a fully sequenced test plan consumable by **Person 4 (Test Engine)**.
+
+#### Request Schema:
+| Field | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `accuracy_class` | string | **Yes** | Accuracy class (`"I"`, `"II"`, `"III"`, `"IIII"`) |
+| `Max` | float | **Yes** | Maximum weighing capacity |
+| `Min` | float | No | Minimum capacity |
+| `e` | float | **Yes** | Verification scale interval |
+| `d` | float | No | Actual scale interval |
+| `unit` | string | No | Mass unit |
+| `job_id` | string | No | External Job identifier |
+| `instrument_id` | string | No | External Instrument / Serial identifier |
+| `verification_type`| string | No | `"INITIAL"` or `"SUBSEQUENT"` |
+| `is_type_evaluation`| bool | No | Set true for Model Approval (10 repeatability runs, creep, etc.) |
+
+#### Example Request:
+```json
+{
+  "job_id": "JOB-2026-001",
+  "instrument_id": "INST-NAWI-882",
+  "accuracy_class": "III",
+  "Max": 15.0,
+  "Min": 0.1,
+  "e": 0.005,
+  "d": 0.005,
+  "unit": "kg",
+  "verification_type": "INITIAL"
+}
+```
+
+#### Example Response (200 OK):
+```json
+{
+  "success": true,
+  "status_code": 200,
+  "data": {
+    "test_plan_id": "PLAN-7E6D8A21",
+    "job_id": "JOB-2026-001",
+    "instrument_id": "INST-NAWI-882",
+    "regulatory_profile": "OIML R 76-1:2006 / Indian Legal Metrology (General) Rules, 2011",
+    "accuracy_class": "III",
+    "max_capacity": 15.0,
+    "min_capacity": 0.1,
+    "e": 0.005,
+    "d": 0.005,
+    "n": 3000,
+    "unit": "kg",
+    "verification_type": "INITIAL",
+    "is_partial_plan": false,
+    "partial_plan_reasons": [],
+    "applicable_tests": ["A.1", "A.3", "A.4.2", "A.4.3", "A.4.4", "A.4.7", "A.4.8", "A.4.10", "A.4.12"],
+    "not_applicable_tests": ["A.2", "A.4.9", "A.4.11.1", "A.5.1", "A.5.3"],
+    "calculated_test_loads": [0.0, 0.1, 2.5, 5.0, 7.5, 10.0, 15.0],
+    "required_equipment": [
+      "Class M1 (or M2) Reference Standard Weights (Maximum permissible error <= 1/3 instrument MPE)",
+      "Calibrated auxiliary fractional weights (0.0005 kg for turning-point determination)",
+      "Precision digital thermo-hygrometer for ambient temperature and relative humidity logging",
+      "Stop watch / calibrated digital timer (+/- 0.1s resolution)"
+    ],
+    "required_environmental_conditions": {
+      "prescribed_temperature_range": "+10°C to +30°C for routine verification; -10°C to +40°C for model approval",
+      "max_temperature_rate_of_change": "5°C per hour (1°C/h for Class I)",
+      "relative_humidity_range": "20% to 85% RH (non-condensing)",
+      "barometric_pressure_range": "86 kPa to 106 kPa (ambient atmospheric)"
+    },
+    "mpe_reference": "OIML R 76-1:2006 Table 6 / Seventh Schedule Table 2 (INITIAL verification)",
+    "tests": [...]
+  },
+  "timestamp": "2026-09-17T01:05:00.000000+00:00"
+}
+```
+
+#### Error Cases:
+- **400 Bad Request (`MISSING_PLAN_PARAMETERS`):** Missing `accuracy_class`, `Max`, or `e`.
+- **422 Unprocessable Entity (`INVALID_PARAMETER_FORMAT`):** Non-numeric capacity or scale interval.
+
+---
+
+### Endpoint 5: Retrieve Regulatory Profile/Version
+`GET /regulatory/profile`
+
+Returns metadata regarding active statutory frameworks, legal jurisdictions, supported accuracy classes, and distinction rules.
+
+#### Example Request:
+```http
+GET /regulatory/profile HTTP/1.1
+Host: api.metriq.internal
+```
+
+#### Example Response (200 OK):
+```json
+{
+  "success": true,
+  "status_code": 200,
+  "data": {
+    "engine_name": "MetrIQ Regulatory Compliance Engine",
+    "version": "1.0.0",
+    "active_profile": "OIML R 76-1:2006 / Indian Legal Metrology (General) Rules, 2011",
+    "supported_accuracy_classes": ["I", "II", "III", "IIII"],
+    "supported_verification_types": ["INITIAL", "SUBSEQUENT", "IN_SERVICE"],
+    "primary_indian_sources": [
+      {
+        "code": "LM_ACT_2009",
+        "title": "Legal Metrology Act, 2009 (Act 1 of 2010)",
+        "jurisdiction": "INDIA",
+        "status": "STATUTORY_MANDATORY"
+      },
+      {
+        "code": "IN_LM_2011",
+        "title": "Legal Metrology (General) Rules, 2011",
+        "jurisdiction": "INDIA",
+        "status": "STATUTORY_MANDATORY"
+      },
+      {
+        "code": "IN_AMR_2011",
+        "title": "Legal Metrology (Approval of Models) Rules, 2011",
+        "jurisdiction": "INDIA",
+        "status": "STATUTORY_MANDATORY"
+      },
+      {
+        "code": "IN_GATC_2013",
+        "title": "Legal Metrology (Government Approved Test Centre) Rules, 2013",
+        "jurisdiction": "INDIA",
+        "status": "STATUTORY_MANDATORY"
+      }
+    ],
+    "technical_sources": [
+      {
+        "code": "OIML_R76_2006",
+        "title": "OIML R 76-1:2006 Non-automatic weighing instruments",
+        "jurisdiction": "INTERNATIONAL",
+        "status": "TECHNICAL_STANDARD"
+      },
+      {
+        "code": "OIML_R76_2_2007",
+        "title": "OIML R 76-2:2007 Non-automatic weighing instruments - Pattern evaluation report",
+        "jurisdiction": "INTERNATIONAL",
+        "status": "TECHNICAL_REPORT_FORMAT"
+      }
+    ],
+    "statutory_distinctions": {
+      "indian_legal": "Statutory requirements carrying legal force under Legal Metrology Act, 2009 and Central Rules.",
+      "oiml_technical": "International technical standards and test protocols.",
+      "report_formats": "Default evaluation templates (e.g. OIML R 76-2, non-statutory in India).",
+      "configurable_rules": "Parameters that testing laboratories or State controllers can configure.",
+      "manual_review": "Procedures requiring physical visual inspection or inspector discretion."
+    },
+    "gatc_routing_supported": true,
+    "subsequent_mpe_multiplier": 2.0
+  },
+  "timestamp": "2026-09-17T01:05:00.000000+00:00"
+}
+```
+
+---
+
+### Endpoint 6: Retrieve Rule / Source Information
+`GET /regulatory/rules/{rule_id}`
+
+Retrieves statutory citations, formulas, test requirements, or standard source documentation for any rule, test ID, standard ID, or accuracy class identifier.
+
+#### Path Parameter:
+- `rule_id`: e.g. `A.4.4`, `A.4.7`, `OIML_R76_2006`, `IN_LM_2011`, `CLASS_III`, `RULE_GATC_CLASS_RESTRICTION`.
+
+#### Example Request:
+```http
+GET /regulatory/rules/A.4.4 HTTP/1.1
+Host: api.metriq.internal
+```
+
+#### Example Response (200 OK):
+```json
+{
+  "success": true,
+  "status_code": 200,
+  "data": {
+    "rule_id": "A.4.4",
+    "rule_name": "Weighing Performance Test (Increasing & Decreasing Load)",
+    "source": "OIML R 76-1:2006 Clause A.4.4 / Legal Metrology (General) Rules, 2011 Seventh Schedule Part II Clause 2",
+    "category": "STATUTORY_TEST_PROCEDURE",
+    "applicable_when": "Always applicable across all accuracy classes and verification jobs.",
+    "not_applicable_when": "Never.",
+    "required_inputs": ["min_capacity", "mpe_breakpoints", "50_percent_max", "max_capacity"],
+    "manual_review": false,
+    "priority": 6,
+    "type": "STATUTORY_TEST_DEFINITION"
+  },
+  "timestamp": "2026-09-17T01:05:00.000000+00:00"
+}
+```
+
+#### Error Cases:
+- **404 Not Found (`RULE_NOT_FOUND`):** Unknown identifier. Returns suggested IDs to assist client integration.
+```json
+{
+  "success": false,
+  "status_code": 404,
+  "error": {
+    "code": "RULE_NOT_FOUND",
+    "message": "Regulatory rule, test, or standard 'UNKNOWN_RULE' was not found in knowledge base or registry.",
+    "details": {
+      "requested_id": "UNKNOWN_RULE",
+      "suggested_ids": ["A.1", "A.4.4", "A.4.7", "A.4.8", "OIML_R76_2006", "IN_LM_2011"]
+    }
+  },
+  "timestamp": "2026-09-17T01:05:00.000000+00:00"
+}
+```
+
 
 
