@@ -301,6 +301,7 @@ class MPECalculationResult:
     fail: Optional[bool] = None
     margin: Optional[float] = None
     margin_in_e: Optional[float] = None
+    audit_trace: Optional[Any] = None
 
     @property
     def is_pass(self) -> Optional[bool]:
@@ -332,6 +333,13 @@ class MPECalculationResult:
             data["margin"] = self.margin
             data["margin_in_e"] = self.margin_in_e
 
+        if self.audit_trace is not None:
+            data["audit_trace"] = (
+                self.audit_trace.to_dict()
+                if hasattr(self.audit_trace, "to_dict")
+                else self.audit_trace
+            )
+
         return data
 
 
@@ -357,14 +365,16 @@ class MPEEngine:
         cls,
         accuracy_class: AccuracyClass,
         load_in_e: Decimal,
+        custom_bands: Optional[List[MPEBandDefinition]] = None,
     ) -> Tuple[MPEBandDefinition, bool]:
         """
         Identifies the statutory MPE band for a given class and load_in_e using exact decimal comparisons.
+        Supports data-driven custom band overrides from regulatory profiles.
         
         Returns:
             Tuple of (matched_band: MPEBandDefinition, is_within_statutory_capacity: bool).
         """
-        bands = MPE_STATUTORY_TABLE.get(accuracy_class)
+        bands = custom_bands if custom_bands else MPE_STATUTORY_TABLE.get(accuracy_class)
         if not bands:
             raise ValueError(f"No statutory MPE bands registered for Accuracy Class {accuracy_class}.")
 
@@ -394,6 +404,7 @@ class MPEEngine:
         verification_type: Union[str, bool, VerificationType, JobType] = VerificationType.INITIAL,
         observed_error: Optional[Union[float, int, str, Decimal]] = None,
         observed_error_in_e: Optional[Union[float, int, str, Decimal]] = None,
+        profile: Optional[Any] = None,
     ) -> MPECalculationResult:
         """
         Calculates Maximum Permissible Error and optionally evaluates observed error.
@@ -404,6 +415,7 @@ class MPEEngine:
         :param verification_type: 'INITIAL' or 'SUBSEQUENT' (also accepts aliases or booleans).
         :param observed_error: Observed indication error in instrument measurement units (e.g. kg).
         :param observed_error_in_e: Observed indication error expressed in multiples of e.
+        :param profile: Optional RegulatoryProfile providing data-driven MPE tables and audit traces.
         :return: MPECalculationResult with complete statutory breakdown.
         """
         # 1. Parse and validate accuracy class
@@ -428,24 +440,37 @@ class MPEEngine:
         d_load_in_e = d_abs_load / d_e
 
         # 5. Lookup statutory band using exact Decimal logic (zero arbitrary tolerances)
-        band, is_within_capacity = cls.lookup_band(acc_class, d_load_in_e)
+        custom_bands = None
+        if profile is not None and hasattr(profile, "get_mpe_bands_for_class"):
+            custom_bands = profile.get_mpe_bands_for_class(acc_class)
+
+        band, is_within_capacity = cls.lookup_band(acc_class, d_load_in_e, custom_bands=custom_bands)
 
         # 6. Determine MPE in e
         if v_type == VerificationType.INITIAL:
             d_mpe_in_e = band.mpe_initial_e
-            source_citation = cls.SOURCE_INITIAL
+            source_citation = (
+                profile.source
+                if (profile is not None and getattr(profile, "source", None))
+                else cls.SOURCE_INITIAL
+            )
             type_label = "INITIAL"
         else:
             d_mpe_in_e = band.mpe_subsequent_e
-            source_citation = cls.SOURCE_SUBSEQUENT
+            source_citation = (
+                profile.source
+                if (profile is not None and getattr(profile, "source", None))
+                else cls.SOURCE_SUBSEQUENT
+            )
             type_label = "SUBSEQUENT"
 
         # 7. Calculate MPE in instrument measurement units
         d_mpe_absolute = d_mpe_in_e * d_e
 
         # 8. Build applicable rule string
+        table_name = "Table 6" if not custom_bands else "Custom Profile MPE Table"
         applicable_rule = (
-            f"Table 6 (Class {acc_class.roman}, Band {band.band_index}: {band.description}) -> "
+            f"{table_name} (Class {acc_class.roman}, Band {band.band_index}: {band.description}) -> "
             f"MPE = +/-{d_mpe_in_e} e"
         )
         if not is_within_capacity:
@@ -483,6 +508,26 @@ class MPEEngine:
             margin = float(d_margin)
             margin_in_e = float(d_margin_e)
 
+        # 10. Construct audit trace if profile provided
+        audit_trace = None
+        if profile is not None and hasattr(profile, "create_audit_trace"):
+            reg_name = getattr(profile, "regulation_name", "Statutory Regulation")
+            audit_trace = profile.create_audit_trace(
+                rule_id="RULE_STATUTORY_MPE",
+                applied_to=f"Load {d_load} (ratio {d_load_in_e:,.2f} e) for Class {acc_class.roman}",
+                rule_name="MPE Tolerance Bands",
+                clause=f"{reg_name} Band {band.band_index}",
+                rationale=f"Tolerance limit +/-{d_mpe_in_e} e applied for load range {band.description}.",
+                parameters={
+                    "load": float(d_load),
+                    "e": float(d_e),
+                    "load_in_e": float(d_load_in_e),
+                    "verification_type": type_label,
+                    "mpe_in_e": float(d_mpe_in_e),
+                    "mpe_absolute": float(d_mpe_absolute),
+                },
+            )
+
         return MPECalculationResult(
             load=float(d_load),
             e=float(d_e),
@@ -501,6 +546,7 @@ class MPEEngine:
             fail=fail,
             margin=margin,
             margin_in_e=margin_in_e,
+            audit_trace=audit_trace,
         )
 
 
@@ -511,6 +557,7 @@ def calculate_mpe_statutory(
     verification_type: Union[str, bool, VerificationType, JobType] = VerificationType.INITIAL,
     observed_error: Optional[Union[float, int, str, Decimal]] = None,
     observed_error_in_e: Optional[Union[float, int, str, Decimal]] = None,
+    profile: Optional[Any] = None,
 ) -> MPECalculationResult:
     """Convenience function calling MPEEngine.calculate."""
     return MPEEngine.calculate(
@@ -520,4 +567,5 @@ def calculate_mpe_statutory(
         verification_type=verification_type,
         observed_error=observed_error,
         observed_error_in_e=observed_error_in_e,
+        profile=profile,
     )

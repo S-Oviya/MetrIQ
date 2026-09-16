@@ -1344,5 +1344,110 @@ Host: api.metriq.internal
 }
 ```
 
+---
 
+## 13. Regulatory Rule Versioning, Lifecycle Statuses, & Audit Trail
 
+The module `app.regulatory.profile` ensures that the MetrIQ Regulatory Engine never assumes metrological regulations are permanently fixed or immutable. It provides complete data-driven rule versioning, jurisdictional switching, lifecycle tracking, and auditor-friendly statutory provenance explanations without rewriting calculation engines.
+
+### 13.1 Lifecycle Statuses Supported
+
+| Status | Definition | Operational Behavior |
+| :--- | :--- | :--- |
+| `ACTIVE` | Currently verified, statutory law in legal force (e.g. `IN_LM_2011_ACTIVE`). | Used by default for all legal stamping and verifications. |
+| `DRAFT` | Proposed regulatory amendment published for consultation but not yet gazetted. | Excluded from default version selection; requires `allow_draft=True`. |
+| `SUPERSEDED` | Historical regulation replaced by an official gazette notification (e.g. pre-2011 baseline). | Only selected when an audit evaluates a historical verification date (`at_date <= effective_to`). |
+| `MANUAL_REVIEW` | Circulating secondary-source reports or draft notices with unverified parameters (e.g. `IN_LM_2026_GSR568E_DRAFT`). | Marked non-authoritative (`is_authoritative=False`). Triggers `is_partial_plan=True` and `PROFILE_MANUAL_REVIEW_REQUIRED` items in test plans. |
+
+---
+
+### 13.2 Data-Driven Rule Domains (Zero-Code Modification)
+
+The system allows changing the following domains purely through structured data profiles without code changes:
+
+1. **MPE Tables (`mpe_tables`):**
+   Override default OIML Table 6 / Seventh Schedule Table 2 with custom load intervals, boundaries, and MPE limits (e.g. aerospace calibration).
+2. **Statutory Fees (`fees`):**
+   Configurable capacity tier schedules (e.g. ₹200 for $\le 50\text{ kg}$, ₹500 for $\le 500\text{ kg}$, ₹2,000 for $\le 5,000\text{ kg}$, ₹5,000 for $> 5,000\text{ kg}$) and model approval fees (₹25,000 baseline vs ₹50,000 reported).
+3. **GATC Applicability (`gatc_applicability`):**
+   Accreditation limits (maximum 5,000 kg capacity) and eligible classes (`II`, `III`, `IIII`). Automatically rejects Class I per GATC Rule 4(1).
+4. **Test-Weight Substitution (`test_weight_substitution`):**
+   Maximum allowable material substitution ratio (default 50% per OIML Clause 3.7.3 vs 20% limit reported in unverified drafts).
+5. **State-Specific Rules (`state_specific_rules`):**
+   Local State enforcement rules (e.g. Maharashtra inspection cess, e-stamping portal integration, and quarterly reporting).
+6. **Re-Verification Periods (`re_verification_periods`):**
+   Mandated calibration cycle in months (commercial: 12 months, precision lab: 24 months, industrial weighbridges: 6 or 12 months).
+
+---
+
+### 13.3 Critical Statutory Safeguard: G.S.R. 568(E) Isolation
+
+> [!CAUTION]
+> **Statutory Integrity Rule:** Circulating industry claims regarding the reported *Legal Metrology (General) Fourth Amendment Rules, 2026 (G.S.R. 568(E))*—specifically the **20% test weight substitution restriction** and **₹50,000 model approval fee**—are **NOT verified against the official Gazette of India**.
+
+1. The MetrIQ engine strictly stores G.S.R. 568(E) as `ProfileStatus.MANUAL_REVIEW` with `is_authoritative = False`.
+2. The default profile selector **never** applies G.S.R. 568(E) automatically without explicit authorization (`allow_manual_review=True` or explicit `profile_id="IN_LM_2026_GSR568E_DRAFT"`).
+3. When G.S.R. 568(E) is selected, `RegulatoryTestPlanGenerator` marks the plan with `is_partial_plan = True` and injects a statutory notice:
+   > *"Regulatory profile 'IN_LM_2026_GSR568E_DRAFT' is marked MANUAL_REVIEW / UNVERIFIED. Secondary-source claims require explicit legal metrology officer confirmation prior to stamping."*
+
+---
+
+### 13.4 Audit Trail: "Why Did the System Apply This Rule?"
+
+Every metrological calculation (MPE, test load, or verification threshold) produces a `RuleAuditTrace` answering the fundamental legal and accreditation question:
+$$\text{"Why did the system apply this rule?"}$$
+
+The explanation is structured and contains all five required statutory elements:
+1. **Rule ID:** e.g. `RULE_STATUTORY_MPE`.
+2. **Source Document:** e.g. `Legal Metrology (General) Rules, 2011 (Ministry of Consumer Affairs)`.
+3. **Clause / Section:** e.g. `Seventh Schedule Table 2 Band 1`.
+4. **Regulatory Version:** e.g. `2011.1-CURRENT`.
+5. **Effective Date:** e.g. `2011-04-01`.
+
+#### Example Audit Trace Output:
+```text
+Rule RULE_STATUTORY_MPE ('MPE Tolerance Bands') was applied per Legal Metrology (General) Rules, 2011, Clause 'Legal Metrology (General) Rules, 2011 Band 2' (Version 2011.1-CURRENT, Effective: 2011-04-01). Applied condition: Load 10.0 (ratio 2,000.00 e) for Class III. Rationale: Tolerance limit +/-1.0 e applied for load range 500 e < m <= 2,000 e.
+```
+
+---
+
+### 13.5 Python Usage Example
+
+```python
+from app.regulatory import (
+    PROFILE_REGISTRY,
+    ProfileStatus,
+    MPEEngine,
+    VerificationType,
+    generate_regulatory_test_plan,
+)
+
+# 1. Select profile based on historical verification date
+hist_profile = PROFILE_REGISTRY.select_profile(jurisdiction="INDIA", at_date="2010-06-01")
+print(hist_profile.profile_id)  # "IN_LM_HISTORIC_2009_SUPERSEDED"
+
+# 2. Select active profile for current enforcement
+active_profile = PROFILE_REGISTRY.select_profile(jurisdiction="INDIA")
+print(active_profile.profile_id)  # "IN_LM_2011_ACTIVE"
+
+# 3. Calculate MPE with embedded audit trace
+res = MPEEngine.calculate(
+    accuracy_class="III",
+    load=10.0,
+    e=0.005,
+    verification_type=VerificationType.INITIAL,
+    profile=active_profile,
+)
+print("Why applied:", res.audit_trace.answer_why())
+
+# 4. Generate test plan with G.S.R. 568(E) manual review isolation
+plan = generate_regulatory_test_plan({
+    "accuracy_class": "III",
+    "Max": 60.0,
+    "e": 0.02,
+    "profile_id": "IN_LM_2026_GSR568E_DRAFT",
+})
+print("Partial plan:", plan["is_partial_plan"])                        # True
+print("Substitution limit:", plan["test_weight_substitution_limit"])  # 0.20 (Reported limit)
+print("Manual review items:", [i["test_id"] for i in plan["manual_review_items"]])
+```

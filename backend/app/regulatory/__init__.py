@@ -137,7 +137,31 @@ from .api import (
     error_response,
 )
 
+from .profile import (
+    ProfileStatus,
+    RuleAuditTrace,
+    RegulatoryProfile,
+    RegulatoryProfileRegistry,
+    PROFILE_REGISTRY,
+    DEFAULT_INDIAN_LM_PROFILE,
+    DRAFT_GSR_568E_PROFILE,
+    SUPERSEDED_LM_2009_PROFILE,
+    INTERNATIONAL_OIML_PROFILE,
+    STATE_MAHARASHTRA_PROFILE,
+)
+
 __all__ = [
+    # Regulatory Profile & Rule Versioning
+    "ProfileStatus",
+    "RuleAuditTrace",
+    "RegulatoryProfile",
+    "RegulatoryProfileRegistry",
+    "PROFILE_REGISTRY",
+    "DEFAULT_INDIAN_LM_PROFILE",
+    "DRAFT_GSR_568E_PROFILE",
+    "SUPERSEDED_LM_2009_PROFILE",
+    "INTERNATIONAL_OIML_PROFILE",
+    "STATE_MAHARASHTRA_PROFILE",
     # Models
     "AccuracyClass",
     "ApplicableTest",

@@ -26,6 +26,7 @@ from .test_plan import generate_test_plan
 from .test_plan_generator import generate_regulatory_test_plan, RegulatoryTestPlanGenerator
 from .sources import REGULATORY_REGISTRY
 from .config import get_manual_review_checklist, get_default_config
+from .profile import PROFILE_REGISTRY, RegulatoryProfile, ProfileStatus
 
 # High-level clean API service functions for Person 1
 from .api import (
@@ -70,6 +71,13 @@ def api_calculate_mpe(payload: Dict[str, Any]) -> Dict[str, Any]:
         v_type = payload.get("verification_type") or payload.get("job_type", "INITIAL")
         observed_error = payload.get("observed_error")
         observed_error_e = payload.get("observed_error_in_e")
+        prof_id = payload.get("profile_id") or payload.get("profile")
+        prof = None
+        if prof_id:
+            if hasattr(prof_id, "get_mpe_bands_for_class"):
+                prof = prof_id
+            elif isinstance(prof_id, str):
+                prof = PROFILE_REGISTRY.get_profile(prof_id)
 
         res = MPEEngine.calculate(
             accuracy_class=acc_class,
@@ -78,6 +86,7 @@ def api_calculate_mpe(payload: Dict[str, Any]) -> Dict[str, Any]:
             verification_type=v_type,
             observed_error=observed_error,
             observed_error_in_e=observed_error_e,
+            profile=prof,
         )
         return res.to_dict()
 

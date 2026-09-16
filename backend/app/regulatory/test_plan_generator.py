@@ -36,6 +36,7 @@ from .test_applicability_engine import (
     InstrumentCharacteristics,
 )
 from .mpe_engine import MPEEngine, VerificationType
+from .profile import RegulatoryProfile, PROFILE_REGISTRY, ProfileStatus
 
 
 def _round_to_e(val: float, e: float) -> float:
@@ -141,6 +142,14 @@ class GeneratedTestPlan:
     required_environmental_conditions: Dict[str, Any]
     mpe_reference: str
     tests: List[Dict[str, Any]]
+    profile_id: str = "IN_LM_2011_ACTIVE"
+    profile_status: str = "ACTIVE"
+    is_authoritative: bool = True
+    statutory_fee_inr: Optional[float] = None
+    test_weight_substitution_limit: float = 0.50
+    re_verification_period_months: int = 12
+    gatc_eligible: bool = True
+    gatc_remarks: str = ""
     generated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> Dict[str, Any]:
@@ -149,6 +158,14 @@ class GeneratedTestPlan:
             "job_id": self.job_id,
             "instrument_id": self.instrument_id,
             "regulatory_profile": self.regulatory_profile,
+            "profile_id": self.profile_id,
+            "profile_status": self.profile_status,
+            "is_authoritative": self.is_authoritative,
+            "statutory_fee_inr": self.statutory_fee_inr,
+            "test_weight_substitution_limit": self.test_weight_substitution_limit,
+            "re_verification_period_months": self.re_verification_period_months,
+            "gatc_eligible": self.gatc_eligible,
+            "gatc_remarks": self.gatc_remarks,
             "accuracy_class": self.accuracy_class,
             "max_capacity": self.max_capacity,
             "min_capacity": self.min_capacity,
@@ -197,7 +214,28 @@ class RegulatoryTestPlanGenerator:
         job_id = spec.get("job_id")
         instrument_id = spec.get("instrument_id") or spec.get("serial_number")
         test_plan_id = f"PLAN-{uuid.uuid4().hex[:8].upper()}"
-        reg_profile = spec.get("regulatory_profile") or cls.DEFAULT_PROFILE
+
+        # -------------------------------------------------------------
+        # Step 0: Resolve Data-Driven Regulatory Profile
+        # -------------------------------------------------------------
+        prof: Optional[RegulatoryProfile] = None
+        if "profile" in spec and hasattr(spec["profile"], "profile_id"):
+            prof = spec["profile"]
+        elif "profile_id" in spec and spec["profile_id"]:
+            prof = PROFILE_REGISTRY.get_profile(str(spec["profile_id"]))
+        elif "regulatory_profile" in spec and isinstance(spec["regulatory_profile"], str):
+            prof = PROFILE_REGISTRY.get_profile(spec["regulatory_profile"])
+
+        if prof is None:
+            prof = PROFILE_REGISTRY.get_default_profile()
+
+        reg_profile = (
+            spec.get("regulatory_profile")
+            or (cls.DEFAULT_PROFILE if (prof and prof.profile_id == "IN_LM_2011_ACTIVE") else (prof.regulation_name if prof else cls.DEFAULT_PROFILE))
+        )
+        prof_id = prof.profile_id if prof else "IN_LM_2011_ACTIVE"
+        prof_status = prof.verification_status.value if prof else "ACTIVE"
+        is_authoritative = prof.is_authoritative if prof else True
 
         # -------------------------------------------------------------
         # Step 1: Classification Validation
@@ -223,7 +261,14 @@ class RegulatoryTestPlanGenerator:
         n_val = int(round(max_cap / e_val)) if e_val > 0 else 0
         unit_str = str(spec.get("unit") or "kg").lower()
 
-        # Check for complex / ambiguous multi-interval or validation errors
+        # Dynamic profile parameters
+        fee_inr = prof.get_fee("VERIFICATION", max_cap) if prof else None
+        sub_limit = prof.get_max_substitution_ratio() if prof else 0.50
+        inst_type_name = str(spec.get("instrument_type") or "COMMERCIAL_NAWI")
+        rev_period = prof.get_re_verification_period_months(inst_type_name) if prof else 12
+        gatc_ok, gatc_msg = prof.is_gatc_eligible(acc_class, max_cap) if prof else (True, "Eligible")
+
+        # Check for complex / ambiguous multi-interval, profile review, or validation errors
         is_partial = False
         partial_reasons: List[str] = []
 
@@ -239,6 +284,13 @@ class RegulatoryTestPlanGenerator:
             is_partial = True
             err_msgs = "; ".join(e.message for e in val_result.errors)
             partial_reasons.append(f"Classification validation failed with regulatory errors: {err_msgs}")
+
+        if prof and prof.verification_status == ProfileStatus.MANUAL_REVIEW:
+            is_partial = True
+            partial_reasons.append(
+                f"Regulatory profile '{prof.profile_id}' is marked {prof.verification_status.value} / UNVERIFIED. "
+                f"Secondary-source claims require explicit legal metrology officer confirmation prior to stamping."
+            )
 
         # -------------------------------------------------------------
         # Step 3: Test Load Calculations
@@ -281,6 +333,7 @@ class RegulatoryTestPlanGenerator:
                     source=source,
                     weights_class=standard_weights_class,
                     is_multi_interval=char.is_multi_interval,
+                    profile=prof,
                 )
                 for pt in item.test_loads:
                     all_test_loads_set.add(pt["load"])
@@ -297,6 +350,7 @@ class RegulatoryTestPlanGenerator:
                     receptor_type=char.receptor_type,
                     weights_class=standard_weights_class,
                     additive_tare=float(spec.get("additive_tare", 0.0)),
+                    profile=prof,
                 )
                 for pt in item.test_loads:
                     all_test_loads_set.add(pt["load"])
@@ -312,6 +366,7 @@ class RegulatoryTestPlanGenerator:
                     source=source,
                     is_type_evaluation=char.is_type_evaluation,
                     weights_class=standard_weights_class,
+                    profile=prof,
                 )
                 for pt in item.test_loads:
                     all_test_loads_set.add(pt["load"])
@@ -328,6 +383,7 @@ class RegulatoryTestPlanGenerator:
                     v_type=v_type,
                     source=source,
                     weights_class=standard_weights_class,
+                    profile=prof,
                 )
                 for pt in item.test_loads:
                     all_test_loads_set.add(pt["load"])
@@ -344,6 +400,7 @@ class RegulatoryTestPlanGenerator:
                     source=source,
                     weights_class=standard_weights_class,
                     max_tare=float(spec.get("max_subtractive_tare") or (0.33 * max_cap)),
+                    profile=prof,
                 )
                 for pt in item.test_loads:
                     all_test_loads_set.add(pt["load"])
@@ -358,6 +415,7 @@ class RegulatoryTestPlanGenerator:
                     v_type=v_type,
                     source=source,
                     weights_class=standard_weights_class,
+                    profile=prof,
                 )
                 for pt in item.test_loads:
                     all_test_loads_set.add(pt["load"])
@@ -407,6 +465,17 @@ class RegulatoryTestPlanGenerator:
                     "action_required": reason,
                 })
 
+        if prof and prof.verification_status == ProfileStatus.MANUAL_REVIEW:
+            manual_review_items.append({
+                "test_id": "PROFILE_MANUAL_REVIEW_REQUIRED",
+                "test_name": f"Regulatory Profile Manual Review ({prof.profile_id})",
+                "source": prof.source,
+                "action_required": (
+                    f"Profile '{prof.profile_id}' is in {prof.verification_status.value} status. "
+                    f"{prof.notes} Verification by Legal Metrology Officer is mandatory before stamping."
+                ),
+            })
+
         # Sort executable tests by priority
         executable_tests.sort(key=lambda t: t.priority)
 
@@ -416,6 +485,14 @@ class RegulatoryTestPlanGenerator:
             job_id=job_id,
             instrument_id=instrument_id,
             regulatory_profile=reg_profile,
+            profile_id=prof_id,
+            profile_status=prof_status,
+            is_authoritative=is_authoritative,
+            statutory_fee_inr=fee_inr,
+            test_weight_substitution_limit=sub_limit,
+            re_verification_period_months=rev_period,
+            gatc_eligible=gatc_ok,
+            gatc_remarks=gatc_msg,
             accuracy_class=acc_class.roman,
             max_capacity=max_cap,
             min_capacity=min_cap,
@@ -452,6 +529,7 @@ class RegulatoryTestPlanGenerator:
         source: str,
         weights_class: str,
         is_multi_interval: bool = False,
+        profile: Optional[Any] = None,
     ) -> ExecutableTestItem:
         """Generates load points based on capacity and MPE transition bands."""
         loads_set: Set[float] = {0.0}
@@ -459,16 +537,22 @@ class RegulatoryTestPlanGenerator:
         if min_cap > 0:
             loads_set.add(round(min_cap, 6))
 
-        # Add MPE transition breakpoints for this class
+        # Add MPE transition breakpoints for this class (or from custom bands in profile)
         breakpoints_in_e: List[float] = []
-        if acc_class == AccuracyClass.CLASS_I:
-            breakpoints_in_e = [50000.0, 200000.0]
-        elif acc_class == AccuracyClass.CLASS_II:
-            breakpoints_in_e = [5000.0, 20000.0]
-        elif acc_class == AccuracyClass.CLASS_III:
-            breakpoints_in_e = [500.0, 2000.0]
-        elif acc_class == AccuracyClass.CLASS_IIII:
-            breakpoints_in_e = [50.0, 200.0]
+        if profile is not None and hasattr(profile, "get_mpe_bands_for_class"):
+            custom_bands = profile.get_mpe_bands_for_class(acc_class)
+            if custom_bands:
+                breakpoints_in_e = [float(b.max_load_e) for b in custom_bands[:-1]]
+
+        if not breakpoints_in_e:
+            if acc_class == AccuracyClass.CLASS_I:
+                breakpoints_in_e = [50000.0, 200000.0]
+            elif acc_class == AccuracyClass.CLASS_II:
+                breakpoints_in_e = [5000.0, 20000.0]
+            elif acc_class == AccuracyClass.CLASS_III:
+                breakpoints_in_e = [500.0, 2000.0]
+            elif acc_class == AccuracyClass.CLASS_IIII:
+                breakpoints_in_e = [50.0, 200.0]
 
         for bp_e in breakpoints_in_e:
             bp_val = round(bp_e * e_val, 6)
@@ -497,7 +581,7 @@ class RegulatoryTestPlanGenerator:
 
         # Increasing
         for l_val in sorted_inc:
-            res = MPEEngine.calculate(acc_class, l_val, e_val, verification_type=v_type)
+            res = MPEEngine.calculate(acc_class, l_val, e_val, verification_type=v_type, profile=profile)
             test_points.append(
                 TestLoadPoint(
                     step_number=step_no,
@@ -518,7 +602,7 @@ class RegulatoryTestPlanGenerator:
         # Decreasing (descending order, excluding duplicate Max)
         sorted_dec = list(reversed(sorted_inc[:-1]))
         for l_val in sorted_dec:
-            res = MPEEngine.calculate(acc_class, l_val, e_val, verification_type=v_type)
+            res = MPEEngine.calculate(acc_class, l_val, e_val, verification_type=v_type, profile=profile)
             test_points.append(
                 TestLoadPoint(
                     step_number=step_no,
@@ -563,6 +647,7 @@ class RegulatoryTestPlanGenerator:
         receptor_type: str,
         weights_class: str,
         additive_tare: float = 0.0,
+        profile: Optional[Any] = None,
     ) -> ExecutableTestItem:
         """
         Eccentricity test load = (Max + additive_tare) / 3 per OIML R 76-1 Clause 3.6.2.4.
@@ -570,7 +655,7 @@ class RegulatoryTestPlanGenerator:
         raw_load = (max_cap + additive_tare) / 3.0
         ecc_load = _round_to_e(raw_load, e_val)
 
-        res = MPEEngine.calculate(acc_class, ecc_load, e_val, verification_type=v_type)
+        res = MPEEngine.calculate(acc_class, ecc_load, e_val, verification_type=v_type, profile=profile)
 
         positions = [
             ("CENTER", "Center of load receptor"),
@@ -624,6 +709,7 @@ class RegulatoryTestPlanGenerator:
         source: str,
         is_type_evaluation: bool,
         weights_class: str,
+        profile: Optional[Any] = None,
     ) -> ExecutableTestItem:
         """Repeatability: 2 load levels (~50% Max and 100% Max) with 3 or 10 weighings."""
         load_half = _round_to_e(max_cap * 0.5, e_val)
@@ -631,8 +717,8 @@ class RegulatoryTestPlanGenerator:
 
         cycles = 10 if is_type_evaluation else 3
 
-        res_half = MPEEngine.calculate(acc_class, load_half, e_val, verification_type=v_type)
-        res_max = MPEEngine.calculate(acc_class, load_max, e_val, verification_type=v_type)
+        res_half = MPEEngine.calculate(acc_class, load_half, e_val, verification_type=v_type, profile=profile)
+        res_max = MPEEngine.calculate(acc_class, load_max, e_val, verification_type=v_type, profile=profile)
 
         test_points: List[Dict[str, Any]] = []
         step_no = 1
@@ -684,6 +770,7 @@ class RegulatoryTestPlanGenerator:
         v_type: VerificationType,
         source: str,
         weights_class: str,
+        profile: Optional[Any] = None,
     ) -> ExecutableTestItem:
         """Digital Discrimination: base load + additional load of 1.4d per OIML R 76-1 Clause A.4.8."""
         extra_load = round(1.4 * d_val, 6)
@@ -696,7 +783,7 @@ class RegulatoryTestPlanGenerator:
 
         test_points: List[Dict[str, Any]] = []
         for idx, (name, b_load) in enumerate(base_loads, start=1):
-            res = MPEEngine.calculate(acc_class, b_load, e_val, verification_type=v_type)
+            res = MPEEngine.calculate(acc_class, b_load, e_val, verification_type=v_type, profile=profile)
             test_points.append(
                 TestLoadPoint(
                     step_number=idx,
@@ -744,6 +831,7 @@ class RegulatoryTestPlanGenerator:
         source: str,
         weights_class: str,
         max_tare: float,
+        profile: Optional[Any] = None,
     ) -> ExecutableTestItem:
         """Tare device test: Net load performance under preset/subtractive tare."""
         t_load = _round_to_e(max_tare, e_val)
@@ -757,7 +845,7 @@ class RegulatoryTestPlanGenerator:
 
         test_points: List[Dict[str, Any]] = []
         for idx, (n_name, n_load) in enumerate(net_loads, start=1):
-            res = MPEEngine.calculate(acc_class, n_load, e_val, verification_type=v_type)
+            res = MPEEngine.calculate(acc_class, n_load, e_val, verification_type=v_type, profile=profile)
             test_points.append(
                 TestLoadPoint(
                     step_number=idx,
@@ -799,9 +887,10 @@ class RegulatoryTestPlanGenerator:
         v_type: VerificationType,
         source: str,
         weights_class: str,
+        profile: Optional[Any] = None,
     ) -> ExecutableTestItem:
         """Creep test at Max with 0, 5, 15, 30 min readings and 15-30 min early termination rule."""
-        res = MPEEngine.calculate(acc_class, max_cap, e_val, verification_type=v_type)
+        res = MPEEngine.calculate(acc_class, max_cap, e_val, verification_type=v_type, profile=profile)
 
         observation_times = [0, 5, 15, 30]
         test_points: List[Dict[str, Any]] = []

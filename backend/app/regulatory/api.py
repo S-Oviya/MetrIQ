@@ -33,6 +33,7 @@ from .test_plan_generator import RegulatoryTestPlanGenerator
 from .sources import REGULATORY_REGISTRY
 from .knowledge import KNOWLEDGE_BASE
 from .models import AccuracyClass, MassUnit
+from .profile import RegulatoryProfile, PROFILE_REGISTRY, ProfileStatus
 
 
 # =============================================================================
@@ -267,6 +268,21 @@ def calculate_mpe_api(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     observed_err_e = payload.get("observed_error_in_e")
     unit_str = payload.get("unit") or "kg"
 
+    # Regulatory profile resolution if requested
+    profile_obj: Optional[RegulatoryProfile] = None
+    profile_id_param = payload.get("profile_id") or payload.get("profile")
+    if profile_id_param:
+        if hasattr(profile_id_param, "get_mpe_bands_for_class"):
+            profile_obj = profile_id_param
+        elif isinstance(profile_id_param, str):
+            profile_obj = PROFILE_REGISTRY.get_profile(profile_id_param)
+            if not profile_obj:
+                return error_response(
+                    code="PROFILE_NOT_FOUND",
+                    message=f"Regulatory profile '{profile_id_param}' was not found in registry.",
+                    status_code=404,
+                )
+
     try:
         res = MPEEngine.calculate(
             accuracy_class=raw_class,
@@ -275,6 +291,7 @@ def calculate_mpe_api(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             verification_type=v_type_raw,
             observed_error=observed_err,
             observed_error_in_e=observed_err_e,
+            profile=profile_obj,
         )
         data = res.to_dict()
         data["unit"] = str(unit_str)
@@ -405,10 +422,55 @@ def generate_test_plan_api(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 # 5. Retrieve Regulatory Profile/Version (GET /regulatory/profile)
 # =============================================================================
 
-def get_regulatory_profile_api() -> Dict[str, Any]:
+def get_regulatory_profile_api(
+    params: Optional[Dict[str, Any]] = None,
+    profile_id: Optional[str] = None,
+    status: Optional[str] = None,
+    date: Optional[str] = None,
+    jurisdiction: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Returns active regulatory profiles, standard versions, and jurisdictional authorities.
+    Supports query parameters:
+    - profile_id: Retrieve specific regulatory profile by ID
+    - status: Filter profiles by ProfileStatus (ACTIVE, DRAFT, SUPERSEDED, MANUAL_REVIEW)
+    - date: Select effective profile at given YYYY-MM-DD date
+    - jurisdiction: Filter or select by jurisdiction (e.g. INDIA, INDIA_MAHARASHTRA, INTERNATIONAL)
     """
+    query = dict(params or {})
+    p_id = profile_id or query.get("profile_id") or query.get("id")
+    p_status = status or query.get("status")
+    p_date = date or query.get("date") or query.get("at_date")
+    p_jur = jurisdiction or query.get("jurisdiction")
+
+    if p_id:
+        found = PROFILE_REGISTRY.get_profile(str(p_id))
+        if not found:
+            return error_response(
+                code="PROFILE_NOT_FOUND",
+                message=f"Regulatory profile '{p_id}' was not found in registry.",
+                status_code=404,
+            )
+        return success_response(found.to_dict(), status_code=200)
+
+    if p_date:
+        allow_draft = str(query.get("allow_draft", "false")).lower() in ("true", "1")
+        allow_mr = str(query.get("allow_manual_review", "false")).lower() in ("true", "1")
+        selected = PROFILE_REGISTRY.select_profile(
+            jurisdiction=p_jur or "INDIA",
+            at_date=str(p_date),
+            allow_draft=allow_draft,
+            allow_manual_review=allow_mr,
+        )
+        return success_response(selected.to_dict(), status_code=200)
+
+    if p_status or p_jur:
+        listed = PROFILE_REGISTRY.list_profiles(status=p_status, jurisdiction=p_jur)
+        return success_response({
+            "profiles": [p.to_dict() for p in listed],
+            "count": len(listed),
+        }, status_code=200)
+
     indian_sources = [
         {
             "code": "LM_ACT_2009",
@@ -464,10 +526,13 @@ def get_regulatory_profile_api() -> Dict[str, Any]:
         },
     ]
 
+    default_prof = PROFILE_REGISTRY.get_default_profile()
     profile_data = {
         "engine_name": "MetrIQ Regulatory Compliance Engine",
         "version": "1.0.0",
         "active_profile": "OIML R 76-1:2006 / Indian Legal Metrology (General) Rules, 2011",
+        "active_profile_details": default_prof.to_dict(),
+        "registered_profiles": [p.to_dict() for p in PROFILE_REGISTRY.list_profiles()],
         "supported_accuracy_classes": ["I", "II", "III", "IIII"],
         "supported_verification_types": ["INITIAL", "SUBSEQUENT", "IN_SERVICE"],
         "primary_indian_sources": indian_sources,
@@ -645,7 +710,7 @@ class RegulatoryAPI:
         elif norm_path in ("/regulatory/profile", "/profile"):
             if clean_method != "GET":
                 return error_response("METHOD_NOT_ALLOWED", f"Method {clean_method} not allowed for {path}. Expected GET.", 405)
-            return cls.get_profile()
+            return cls.get_profile(params=params)
 
         # 6. GET /regulatory/rules/{rule_id}
         rule_match = re.match(r"^/(?:regulatory/)?rules/([^/]+)/?$", norm_path)
