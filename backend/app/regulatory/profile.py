@@ -206,8 +206,13 @@ class RegulatoryProfile:
             return int(self.re_verification_periods.get("DEFAULT", 12))
         return 12
 
-    def is_gatc_eligible(self, accuracy_class: AccuracyClass, max_capacity_kg: float) -> Tuple[bool, str]:
+    def is_gatc_eligible(
+        self, accuracy_class: Union[str, AccuracyClass], max_capacity_kg: float
+    ) -> Tuple[bool, str]:
         """Evaluates whether GATC testing is legally permissible under this profile."""
+        if isinstance(accuracy_class, str):
+            accuracy_class = AccuracyClass.from_value(accuracy_class)
+
         gatc_cfg = self.gatc_applicability or {}
         enabled = gatc_cfg.get("enabled", True)
         if not enabled:

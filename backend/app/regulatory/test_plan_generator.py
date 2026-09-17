@@ -261,12 +261,24 @@ class RegulatoryTestPlanGenerator:
         n_val = int(round(max_cap / e_val)) if e_val > 0 else 0
         unit_str = str(spec.get("unit") or "kg").lower()
 
+        # Normalize capacity to kg for statutory fee tiers and GATC threshold evaluations
+        if unit_str in ("g", "gram", "grams"):
+            max_cap_kg = max_cap * 0.001
+        elif unit_str in ("mg", "milligram", "milligrams"):
+            max_cap_kg = max_cap * 0.000001
+        elif unit_str in ("t", "tonne", "tonnes", "ton"):
+            max_cap_kg = max_cap * 1000.0
+        elif unit_str in ("ct", "carat", "carats"):
+            max_cap_kg = max_cap * 0.0002
+        else:
+            max_cap_kg = max_cap
+
         # Dynamic profile parameters
-        fee_inr = prof.get_fee("VERIFICATION", max_cap) if prof else None
+        fee_inr = prof.get_fee("VERIFICATION", max_cap_kg) if prof else None
         sub_limit = prof.get_max_substitution_ratio() if prof else 0.50
         inst_type_name = str(spec.get("instrument_type") or "COMMERCIAL_NAWI")
         rev_period = prof.get_re_verification_period_months(inst_type_name) if prof else 12
-        gatc_ok, gatc_msg = prof.is_gatc_eligible(acc_class, max_cap) if prof else (True, "Eligible")
+        gatc_ok, gatc_msg = prof.is_gatc_eligible(acc_class, max_cap_kg) if prof else (True, "Eligible")
 
         # Check for complex / ambiguous multi-interval, profile review, or validation errors
         is_partial = False

@@ -70,8 +70,10 @@ class AccuracyClass(str, Enum):
         return mapping[self]
 
     @classmethod
-    def from_string(cls, val: str) -> "AccuracyClass":
-        clean = val.strip().upper().replace(" ", "_")
+    def from_string(cls, val: Any) -> "AccuracyClass":
+        if isinstance(val, AccuracyClass):
+            return val
+        clean = str(val).strip().upper().replace(" ", "_")
         aliases = {
             "I": cls.CLASS_I,
             "1": cls.CLASS_I,
@@ -95,6 +97,10 @@ class AccuracyClass(str, Enum):
         if clean in aliases:
             return aliases[clean]
         raise ValueError(f"Unknown accuracy class: {val}")
+
+    @classmethod
+    def from_value(cls, val: Any) -> "AccuracyClass":
+        return cls.from_string(val)
 
 
 class JobType(str, Enum):
