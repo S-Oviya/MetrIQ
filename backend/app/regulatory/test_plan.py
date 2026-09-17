@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Set
 
 from .models import (
+    AccuracyClass,
     InstrumentProfile,
     JobType,
     TestType,
@@ -241,11 +242,12 @@ def generate_repeatability_points(
     Runs 2 test series (approx. 50% Max and 100% Max) with specified cycles (3 for verification, 10 for approval).
     """
     points: List[TestPoint] = []
-    num_cycles = (
-        config.repeatability_cycles_approval
-        if job_type == JobType.MODEL_APPROVAL
-        else config.repeatability_cycles_verification
-    )
+    if job_type == JobType.MODEL_APPROVAL:
+        num_cycles = config.repeatability_cycles_approval
+    elif instrument.accuracy_class in (AccuracyClass.CLASS_I, AccuracyClass.CLASS_II):
+        num_cycles = max(6, config.repeatability_cycles_verification)
+    else:
+        num_cycles = config.repeatability_cycles_verification
 
     load_half = _round_to_e(instrument.max_capacity * config.repeatability_load_1_ratio, instrument.e)
     load_max = _round_to_e(instrument.max_capacity * config.repeatability_load_2_ratio, instrument.e)

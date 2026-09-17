@@ -67,6 +67,8 @@ from .mpe_engine import (
     MPE_STATUTORY_TABLE,
     VerificationType,
     calculate_mpe_statutory,
+    DigitalIndicationErrorResult,
+    calculate_digital_indication_error,
 )
 
 from .applicability import (
@@ -211,6 +213,8 @@ __all__ = [
     "MPE_STATUTORY_TABLE",
     "VerificationType",
     "calculate_mpe_statutory",
+    "DigitalIndicationErrorResult",
+    "calculate_digital_indication_error",
     # Applicability
     "get_applicable_tests",
     "is_test_applicable",

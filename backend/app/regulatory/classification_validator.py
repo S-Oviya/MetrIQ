@@ -280,6 +280,57 @@ class RegulatoryClassificationValidator:
                     )
                     result.flag_manual_review("Verify software checksum and legally relevant firmware build in menu.")
 
+        # 7. Zero-setting devices statutory checks (OIML R 76-1:2006 Clause 4.5.1 / Indian General Rules)
+        # Initial zero-setting range shall not exceed 20% of Max
+        initial_zs = (
+            data.get("initial_zero_setting_range_percent")
+            or data.get("initial_zero_setting_range_pct")
+            or data.get("initial_zero_setting_pct")
+        )
+        if initial_zs is not None:
+            try:
+                izs_val = float(initial_zs)
+                if izs_val > 20.0 + 1e-6:
+                    result.add_warning(
+                        rule_id="RULE_INITIAL_ZERO_SETTING_RANGE_EXCEEDED",
+                        field="initial_zero_setting_range_percent",
+                        actual_value=f"{izs_val}%",
+                        expected_condition="<= 20% of Max",
+                        source=f"{cls.SOURCE_OIML} Clause 4.5.1",
+                        message=(
+                            f"Initial zero-setting range of {izs_val}% exceeds statutory limit of 20% of Max. "
+                            f"Requires manual regulatory examination to ensure non-intended zero manipulation is prevented."
+                        ),
+                    )
+                    result.flag_manual_review(f"Initial zero-setting range ({izs_val}%) exceeds statutory 20% of Max limit.")
+            except (ValueError, TypeError):
+                pass
+
+        # Non-automatic / Semi-automatic zero-setting range shall not exceed 4% of Max (+/- 2% of Max)
+        zs_range = (
+            data.get("zero_setting_range_percent")
+            or data.get("zero_setting_range_pct")
+            or data.get("zero_setting_pct")
+        )
+        if zs_range is not None:
+            try:
+                zs_val = float(zs_range)
+                if zs_val > 4.0 + 1e-6:
+                    result.add_warning(
+                        rule_id="RULE_ZERO_SETTING_RANGE_EXCEEDED",
+                        field="zero_setting_range_percent",
+                        actual_value=f"{zs_val}%",
+                        expected_condition="<= 4% of Max (+/- 2% of Max)",
+                        source=f"{cls.SOURCE_OIML} Clause 4.5.1",
+                        message=(
+                            f"Non-automatic / semi-automatic zero-setting range of {zs_val}% exceeds statutory limit of 4% of Max. "
+                            f"Requires manual technical review."
+                        ),
+                    )
+                    result.flag_manual_review(f"Zero-setting range ({zs_val}%) exceeds statutory 4% of Max limit.")
+            except (ValueError, TypeError):
+                pass
+
         # Build summary
         result.instrument_summary = {
             "accuracy_class": acc_class.roman,

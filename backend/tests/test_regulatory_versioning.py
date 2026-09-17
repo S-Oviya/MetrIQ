@@ -246,22 +246,32 @@ class TestDataDrivenGATCAndSubstitution(unittest.TestCase):
     """Tests GATC routing rules and standard test weight substitution limits."""
 
     def test_gatc_eligibility(self):
-        """Class II up to 5000kg eligible; Class I or > 5000kg ineligible."""
+        """Class III <= 150kg & Class IIII eligible; Class I, Class II, or Class III > 150kg ineligible."""
         prof = DEFAULT_INDIAN_LM_PROFILE
 
-        # Class II at 500 kg is eligible
-        ok, msg = prof.is_gatc_eligible(AccuracyClass.CLASS_II, max_capacity_kg=500.0)
-        self.assertTrue(ok)
+        # Class II is NOT eligible under GATC Rules 2013 First Schedule
+        ok_cls2, msg_cls2 = prof.is_gatc_eligible(AccuracyClass.CLASS_II, max_capacity_kg=500.0)
+        self.assertFalse(ok_cls2)
+        self.assertIn("State Legal Metrology Officers", msg_cls2)
 
         # Class I is NOT eligible (must be tested directly by State LM Officers)
         ok_cls1, msg_cls1 = prof.is_gatc_eligible(AccuracyClass.CLASS_I, max_capacity_kg=1.0)
         self.assertFalse(ok_cls1)
         self.assertIn("State Legal Metrology Officers", msg_cls1)
 
-        # Capacity > 5000 kg exceeds ceiling
-        ok_heavy, msg_heavy = prof.is_gatc_eligible(AccuracyClass.CLASS_III, max_capacity_kg=10000.0)
-        self.assertFalse(ok_heavy)
-        self.assertIn("exceeds maximum GATC", msg_heavy)
+        # Class III <= 150 kg is eligible
+        ok_cls3_light, msg_cls3_light = prof.is_gatc_eligible(AccuracyClass.CLASS_III, max_capacity_kg=100.0)
+        self.assertTrue(ok_cls3_light)
+        self.assertIn("legally eligible", msg_cls3_light)
+
+        # Class III > 150 kg exceeds statutory GATC ceiling under First Schedule
+        ok_cls3_heavy, msg_cls3_heavy = prof.is_gatc_eligible(AccuracyClass.CLASS_III, max_capacity_kg=200.0)
+        self.assertFalse(ok_cls3_heavy)
+        self.assertIn("exceeds statutory GATC limit of 150.0 kg", msg_cls3_heavy)
+
+        # Class IIII is eligible
+        ok_cls4, msg_cls4 = prof.is_gatc_eligible(AccuracyClass.CLASS_IIII, max_capacity_kg=2000.0)
+        self.assertTrue(ok_cls4)
 
     def test_test_weight_substitution_ratio(self):
         """Statutory baseline 50% vs reported G.S.R. 568(E) 20% limit."""

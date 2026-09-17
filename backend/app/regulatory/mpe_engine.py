@@ -549,6 +549,157 @@ class MPEEngine:
             audit_trace=audit_trace,
         )
 
+    @classmethod
+    def calculate_digital_indication_error(
+        cls,
+        accuracy_class: Union[str, AccuracyClass],
+        applied_load_L: Union[float, int, str, Decimal],
+        indication_I: Union[float, int, str, Decimal],
+        delta_L: Union[float, int, str, Decimal],
+        e: Union[float, int, str, Decimal],
+        zero_error_E0: Union[float, int, str, Decimal] = Decimal("0"),
+        verification_type: Union[str, bool, VerificationType, JobType] = VerificationType.INITIAL,
+        profile: Optional[Any] = None,
+    ) -> "DigitalIndicationErrorResult":
+        """
+        Calculates indication prior to rounding P, error E, and zero-corrected error Ec
+        per OIML R 76-1:2006 Clause A.4.4.3 using exact Decimal arithmetic.
+
+        Formulas:
+            P = I + 0.5e - delta_L
+            E = P - L
+            Ec = E - E0
+        """
+        d_L = _to_decimal(applied_load_L, "applied_load_L")
+        d_I = _to_decimal(indication_I, "indication_I")
+        d_dL = _to_decimal(delta_L, "delta_L")
+        d_e = _to_decimal(e, "e")
+        d_E0 = _to_decimal(zero_error_E0, "zero_error_E0")
+
+        if d_e <= Decimal("0"):
+            raise ValueError(f"Verification scale interval e must be strictly positive (> 0). Received: {e}")
+
+        # 1. Indication prior to rounding: P = I + 0.5e - delta_L
+        d_half_e = d_e / Decimal("2")
+        d_P = d_I + d_half_e - d_dL
+
+        # 2. Error prior to rounding: E = P - L
+        d_E = d_P - d_L
+
+        # 3. Corrected error: Ec = E - E0
+        d_Ec = d_E - d_E0
+
+        # 4. Determine MPE for applied load L
+        mpe_res = cls.calculate(
+            accuracy_class=accuracy_class,
+            load=d_L,
+            e=d_e,
+            verification_type=verification_type,
+            profile=profile,
+        )
+        d_mpe_abs = Decimal(str(mpe_res.mpe_absolute))
+
+        # 5. Evaluate compliance: |Ec| <= MPE
+        d_abs_Ec = abs(d_Ec)
+        passed = d_abs_Ec <= d_mpe_abs
+        fail = not passed
+        d_margin = d_mpe_abs - d_abs_Ec
+        d_margin_in_e = d_margin / d_e
+
+        remarks = (
+            f"P = {d_P} (I={d_I} + 0.5e={d_half_e} - dL={d_dL}); "
+            f"E = {d_E} (P - L={d_L}); "
+            f"Ec = {d_Ec} (E - E0={d_E0}); "
+            f"MPE = +/-{d_mpe_abs} -> {'PASS' if passed else 'FAIL'}"
+        )
+
+        return DigitalIndicationErrorResult(
+            indication_I=float(d_I),
+            applied_load_L=float(d_L),
+            e=float(d_e),
+            delta_L=float(d_dL),
+            turning_point_indication_P=float(d_P),
+            error_E=float(d_E),
+            zero_error_E0=float(d_E0),
+            corrected_error_Ec=float(d_Ec),
+            mpe_absolute=float(d_mpe_abs),
+            passed=passed,
+            fail=fail,
+            margin=float(d_margin),
+            margin_in_e=float(d_margin_in_e),
+            remarks=remarks,
+        )
+
+
+@dataclass
+class DigitalIndicationErrorResult:
+    """
+    Statutory digital indication turning-point error calculation result
+    per OIML R 76-1:2006 Clause A.4.4.3 & Indian Legal Metrology Rules, 2011.
+
+    Formulas:
+        P = I + 0.5e - delta_L                 (Indication prior to rounding)
+        E = P - L = I + 0.5e - delta_L - L     (Error prior to rounding)
+        Ec = E - E0                            (Corrected error taking into account zero error)
+    """
+    indication_I: float
+    applied_load_L: float
+    e: float
+    delta_L: float
+    turning_point_indication_P: float
+    error_E: float
+    zero_error_E0: float
+    corrected_error_Ec: float
+    mpe_absolute: float
+    passed: bool
+    fail: bool
+    margin: float
+    margin_in_e: float
+    source: str = "OIML R 76-1:2006 Clause A.4.4.3 / Legal Metrology (General) Rules, 2011 Seventh Schedule"
+    remarks: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "indication_I": self.indication_I,
+            "applied_load_L": self.applied_load_L,
+            "e": self.e,
+            "delta_L": self.delta_L,
+            "turning_point_indication_P": self.turning_point_indication_P,
+            "error_E": self.error_E,
+            "zero_error_E0": self.zero_error_E0,
+            "corrected_error_Ec": self.corrected_error_Ec,
+            "mpe_absolute": self.mpe_absolute,
+            "passed": self.passed,
+            "fail": self.fail,
+            "margin": self.margin,
+            "margin_in_e": self.margin_in_e,
+            "source": self.source,
+            "remarks": self.remarks,
+        }
+
+
+def calculate_digital_indication_error(
+    accuracy_class: Union[str, AccuracyClass],
+    applied_load_L: Union[float, int, str, Decimal],
+    indication_I: Union[float, int, str, Decimal],
+    delta_L: Union[float, int, str, Decimal],
+    e: Union[float, int, str, Decimal],
+    zero_error_E0: Union[float, int, str, Decimal] = Decimal("0"),
+    verification_type: Union[str, bool, VerificationType, JobType] = VerificationType.INITIAL,
+    profile: Optional[Any] = None,
+) -> DigitalIndicationErrorResult:
+    """Convenience function calling MPEEngine.calculate_digital_indication_error."""
+    return MPEEngine.calculate_digital_indication_error(
+        accuracy_class=accuracy_class,
+        applied_load_L=applied_load_L,
+        indication_I=indication_I,
+        delta_L=delta_L,
+        e=e,
+        zero_error_E0=zero_error_E0,
+        verification_type=verification_type,
+        profile=profile,
+    )
+
 
 def calculate_mpe_statutory(
     accuracy_class: Union[str, AccuracyClass],

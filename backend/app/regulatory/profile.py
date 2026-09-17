@@ -209,7 +209,13 @@ class RegulatoryProfile:
     def is_gatc_eligible(
         self, accuracy_class: Union[str, AccuracyClass], max_capacity_kg: float
     ) -> Tuple[bool, str]:
-        """Evaluates whether GATC testing is legally permissible under this profile."""
+        """
+        Evaluates whether GATC testing is legally permissible under this profile.
+        Under the Legal Metrology (Government Approved Test Centre) Rules, 2013 (First Schedule):
+        - Class III instruments are eligible ONLY up to 150 kg.
+        - Class IIII instruments are eligible.
+        - Class I and Class II instruments are strictly ineligible and must be verified by State Officers.
+        """
         if isinstance(accuracy_class, str):
             accuracy_class = AccuracyClass.from_value(accuracy_class)
 
@@ -218,15 +224,25 @@ class RegulatoryProfile:
         if not enabled:
             return False, "GATC verification is disabled under this regulatory profile."
 
-        allowed_classes = gatc_cfg.get("allowed_classes", ["II", "III", "IIII"])
+        allowed_classes = gatc_cfg.get("allowed_classes", ["III", "IIII"])
         if accuracy_class.roman not in allowed_classes:
             return (
                 False,
                 f"Class {accuracy_class.roman} instruments must be tested directly by State Legal Metrology "
-                f"Officers; ineligible for GATC under Rule 4(1).",
+                f"Officers; ineligible for GATC under Rule 3 and First Schedule of GATC Rules, 2013.",
             )
 
-        max_allowed_cap = gatc_cfg.get("max_capacity_kg", 5000.0)
+        # Enforce statutory 150 kg ceiling for Class III under First Schedule of GATC Rules, 2013
+        if accuracy_class == AccuracyClass.CLASS_III:
+            class_iii_limit = float(gatc_cfg.get("class_iii_max_capacity_kg", 150.0))
+            if max_capacity_kg > class_iii_limit:
+                return (
+                    False,
+                    f"Class III capacity {max_capacity_kg} kg exceeds statutory GATC limit of {class_iii_limit} kg "
+                    f"under First Schedule of GATC Rules, 2013; must be verified by State Legal Metrology Officer.",
+                )
+
+        max_allowed_cap = float(gatc_cfg.get("max_capacity_kg", 5000.0))
         if max_capacity_kg > max_allowed_cap:
             return (
                 False,
@@ -312,8 +328,8 @@ DEFAULT_INDIAN_LM_PROFILE = RegulatoryProfile(
         },
         "RULE_GATC_ROUTING": {
             "title": "GATC Eligibility",
-            "clause": "Rule 4(1), GATC Rules 2013",
-            "description": "Class II, III, and IIII instruments up to 5,000 kg may be verified at GATCs.",
+            "clause": "Rule 3 and First Schedule, GATC Rules 2013",
+            "description": "Class III (<= 150 kg) and Class IIII instruments are eligible for GATC verification.",
         },
         "RULE_WEIGHT_SUBSTITUTION": {
             "title": "Test Load Material Substitution",
@@ -332,7 +348,8 @@ DEFAULT_INDIAN_LM_PROFILE = RegulatoryProfile(
     },
     gatc_applicability={
         "enabled": True,
-        "allowed_classes": ["II", "III", "IIII"],
+        "allowed_classes": ["III", "IIII"],
+        "class_iii_max_capacity_kg": 150.0,
         "max_capacity_kg": 5000.0,
     },
     test_weight_substitution={

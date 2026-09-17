@@ -242,6 +242,10 @@ try:
     def endpoint_mpe(payload: Dict[str, Any] = Body(...)):
         return calculate_mpe_api(payload)
 
+    @router.post("/applicable-tests")
+    def endpoint_applicable_tests(payload: Dict[str, Any] = Body(...)):
+        return determine_applicable_tests_api(payload)
+
     @router.post("/test-plan")
     def endpoint_test_plan(payload: Dict[str, Any] = Body(...)):
         return generate_test_plan_api(payload)
@@ -267,8 +271,8 @@ try:
     def endpoint_evaluate_error(payload: Dict[str, Any] = Body(...)):
         return api_evaluate_error(payload)
 
-    @router.post("/applicable-tests")
-    def endpoint_applicable_tests(payload: Dict[str, Any] = Body(...)):
+    @router.post("/legacy-applicable-tests")
+    def endpoint_legacy_applicable_tests(payload: Dict[str, Any] = Body(...)):
         return api_applicable_tests(payload)
 
     @router.post("/evaluate-applicability")

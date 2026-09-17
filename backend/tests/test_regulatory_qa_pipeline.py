@@ -59,7 +59,12 @@ try:
         IndicationType,
         InstrumentIndicationMode,
     )
-    from app.regulatory.mpe_engine import MPEEngine, VerificationType
+    from app.regulatory.mpe_engine import (
+        MPEEngine,
+        VerificationType,
+        DigitalIndicationErrorResult,
+        calculate_digital_indication_error,
+    )
     from app.regulatory.test_plan_generator import (
         RegulatoryTestPlanGenerator,
         GeneratedTestPlan,
@@ -199,8 +204,8 @@ class TestRegulatoryQAPipeline(unittest.TestCase):
         self.assertEqual(plan.accuracy_class, "II")
         self.assertEqual(plan.n, 60000)
 
-        # GATC Eligibility: Class II <= 5000 kg is eligible
-        self.assertTrue(plan.gatc_eligible)
+        # GATC Eligibility: Class II is strictly prohibited from GATC under Rules 2013 First Schedule
+        self.assertFalse(plan.gatc_eligible)
 
         # MPE check at 50,000e (5,000g) -> 1.5e
         mpe_5000g = self.mpe_engine.calculate(
@@ -693,22 +698,27 @@ class TestRegulatoryQAPipeline(unittest.TestCase):
     # 19. GATC Routing
     # =========================================================================
     def test_19_gatc_routing_logic(self):
-        """Scenario 19: GATC eligibility adheres to Rule 4(1) of GATC Rules 2013."""
+        """Scenario 19: GATC eligibility adheres to Rule 3 and First Schedule of GATC Rules 2013."""
         active_prof = PROFILE_REGISTRY.get_profile("IN_LM_2011_ACTIVE")
 
-        # Class I: always GATC ineligible (prohibited under Rule 4(1))
+        # Class I: always GATC ineligible (prohibited under GATC Rules 2013 First Schedule)
         ok_i, msg_i = active_prof.is_gatc_eligible("I", 220.0)
         self.assertFalse(ok_i)
         self.assertIn("Class I", msg_i)
 
-        # Class III <= 5000 kg: eligible
-        ok_iii, msg_iii = active_prof.is_gatc_eligible("III", 3000.0)
+        # Class II: always GATC ineligible (prohibited under GATC Rules 2013 First Schedule)
+        ok_ii, msg_ii = active_prof.is_gatc_eligible("II", 50.0)
+        self.assertFalse(ok_ii)
+        self.assertIn("Class II", msg_ii)
+
+        # Class III <= 150 kg: eligible
+        ok_iii, msg_iii = active_prof.is_gatc_eligible("III", 150.0)
         self.assertTrue(ok_iii)
 
-        # Class III > 5000 kg: ineligible (exceeds GATC verification limit)
-        ok_heavy, msg_heavy = active_prof.is_gatc_eligible("III", 6000.0)
+        # Class III > 150 kg: ineligible (exceeds statutory GATC ceiling of 150 kg)
+        ok_heavy, msg_heavy = active_prof.is_gatc_eligible("III", 200.0)
         self.assertFalse(ok_heavy)
-        self.assertIn("exceeds maximum GATC accredited ceiling of 5000.0 kg", msg_heavy)
+        self.assertIn("exceeds statutory GATC limit of 150.0 kg", msg_heavy)
 
         # Class IIII <= 5000 kg: eligible
         ok_iiii, _ = active_prof.is_gatc_eligible("IIII", 4000.0)
@@ -744,6 +754,133 @@ class TestRegulatoryQAPipeline(unittest.TestCase):
         self.assertTrue(
             any("is marked MANUAL_REVIEW / UNVERIFIED" in r for r in plan.partial_plan_reasons)
         )
+
+    # =========================================================================
+    # 21. Digital Indication Turning-Point Error Calculation (OIML A.4.4.3)
+    # =========================================================================
+    def test_21_digital_indication_turning_point_error(self):
+        """
+        Scenario 21: Verify digital turning-point error calculation per OIML R 76-1 Clause A.4.4.3:
+            P = I + 0.5e - delta_L
+            E = P - L = I + 0.5e - delta_L - L
+            Ec = E - E0
+        """
+        # Test Case 1: Standard turning-point shift
+        # e = 1 g, L = 200 g, I = 200 g, delta_L = 0.7 g, zero error E0 = +0.1 g
+        # P = 200 + 0.5 - 0.7 = 199.8 g
+        # E = 199.8 - 200 = -0.2 g
+        # Ec = -0.2 - (+0.1) = -0.3 g
+        # Class II at 200 g (200e <= 5000e -> MPE = +/- 0.5 g)
+        # |Ec| = 0.3 <= 0.5 -> PASS, margin = 0.2 g
+        res = calculate_digital_indication_error(
+            accuracy_class="II",
+            applied_load_L=200.0,
+            indication_I=200.0,
+            delta_L=0.7,
+            e=1.0,
+            zero_error_E0=0.1,
+            verification_type="INITIAL",
+        )
+
+        self.assertAlmostEqual(res.turning_point_indication_P, 199.8, places=6)
+        self.assertAlmostEqual(res.error_E, -0.2, places=6)
+        self.assertAlmostEqual(res.corrected_error_Ec, -0.3, places=6)
+        self.assertAlmostEqual(res.mpe_absolute, 0.5, places=6)
+        self.assertTrue(res.passed)
+        self.assertFalse(res.fail)
+        self.assertAlmostEqual(res.margin, 0.2, places=6)
+        self.assertAlmostEqual(res.margin_in_e, 0.2, places=6)
+
+        # Test Case 2: Out of tolerance failure
+        # delta_L = 1.2 g -> P = 200 + 0.5 - 1.2 = 199.3 g -> E = -0.7 g -> Ec = -0.7 - 0.1 = -0.8 g
+        # |Ec| = 0.8 > 0.5 -> FAIL
+        res_fail = calculate_digital_indication_error(
+            accuracy_class="II",
+            applied_load_L=200.0,
+            indication_I=200.0,
+            delta_L=1.2,
+            e=1.0,
+            zero_error_E0=0.1,
+            verification_type="INITIAL",
+        )
+        self.assertFalse(res_fail.passed)
+        self.assertTrue(res_fail.fail)
+        self.assertAlmostEqual(res_fail.margin, -0.3, places=6)
+
+    # =========================================================================
+    # 22. Zero-Setting Range Statutory Limits (OIML Clause 4.5.1)
+    # =========================================================================
+    def test_22_initial_zero_setting_range_limits(self):
+        """
+        Scenario 22: Initial zero-setting range > 20% Max triggers regulatory warning
+        and manual review flag under OIML R 76-1:2006 Clause 4.5.1.
+        """
+        # Spec with initial zero-setting = 25% (exceeds 20% Max)
+        spec_invalid_zs = {
+            "accuracy_class": "III",
+            "Max": 15.0,
+            "Min": 0.1,
+            "e": 0.005,
+            "d": 0.005,
+            "unit": "kg",
+            "initial_zero_setting_range_percent": 25.0,
+        }
+        res = self.validator.validate(spec_invalid_zs)
+        self.assertTrue(res.manual_review_required)
+        self.assertTrue(any(w.rule_id == "RULE_INITIAL_ZERO_SETTING_RANGE_EXCEEDED" for w in res.warnings))
+
+        # Spec with initial zero-setting = 15% (compliant)
+        spec_valid_zs = {
+            "accuracy_class": "III",
+            "Max": 15.0,
+            "Min": 0.1,
+            "e": 0.005,
+            "d": 0.005,
+            "unit": "kg",
+            "initial_zero_setting_range_percent": 15.0,
+        }
+        res_valid = self.validator.validate(spec_valid_zs)
+        self.assertFalse(any(w.rule_id == "RULE_INITIAL_ZERO_SETTING_RANGE_EXCEEDED" for w in res_valid.warnings))
+
+    # =========================================================================
+    # 23. Repeatability Cycles by Accuracy Class (OIML Clause A.4.10)
+    # =========================================================================
+    def test_23_repeatability_cycles_by_accuracy_class(self):
+        """
+        Scenario 23: Repeatability weighings must be at least 6 for Class I and II,
+        and at least 3 for Class III and IIII under Clause A.4.10.
+        """
+        # Class II scale
+        spec_cls2 = {
+            "accuracy_class": "II",
+            "Max": 6000.0,
+            "Min": 5.0,
+            "e": 0.1,
+            "d": 0.1,
+            "unit": "g",
+            "verification_type": "INITIAL",
+        }
+        plan_cls2 = self.generator.generate(spec_cls2)
+        rep_cls2 = next(t for t in plan_cls2.tests if t["test_id"] == "A.4.10")
+        # 2 load levels * 6 cycles = 12 test loads
+        self.assertEqual(len(rep_cls2["test_loads"]), 12)
+        self.assertIn("6 repeated weighings", rep_cls2["acceptance_criteria"])
+
+        # Class III scale
+        spec_cls3 = {
+            "accuracy_class": "III",
+            "Max": 15.0,
+            "Min": 0.1,
+            "e": 0.005,
+            "d": 0.005,
+            "unit": "kg",
+            "verification_type": "INITIAL",
+        }
+        plan_cls3 = self.generator.generate(spec_cls3)
+        rep_cls3 = next(t for t in plan_cls3.tests if t["test_id"] == "A.4.10")
+        # 2 load levels * 3 cycles = 6 test loads
+        self.assertEqual(len(rep_cls3["test_loads"]), 6)
+        self.assertIn("3 repeated weighings", rep_cls3["acceptance_criteria"])
 
 
 if __name__ == "__main__":

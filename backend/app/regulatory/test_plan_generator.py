@@ -727,7 +727,15 @@ class RegulatoryTestPlanGenerator:
         load_half = _round_to_e(max_cap * 0.5, e_val)
         load_max = _round_to_e(max_cap, e_val)
 
-        cycles = 10 if is_type_evaluation else 3
+        # OIML R 76-1:2006 Clause A.4.10:
+        # At least 6 weighings for Class I and II; at least 3 weighings for Class III and IIII.
+        # For type evaluation (pattern approval), 10 weighings at each load level.
+        if is_type_evaluation:
+            cycles = 10
+        elif acc_class in (AccuracyClass.CLASS_I, AccuracyClass.CLASS_II):
+            cycles = 6
+        else:
+            cycles = 3
 
         res_half = MPEEngine.calculate(acc_class, load_half, e_val, verification_type=v_type, profile=profile)
         res_max = MPEEngine.calculate(acc_class, load_max, e_val, verification_type=v_type, profile=profile)
