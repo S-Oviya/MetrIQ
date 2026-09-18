@@ -11,6 +11,7 @@ try:
     from app.regulatory.router import router as regulatory_router
     from app.api.instruments_router import router as instruments_router
     from app.api.jobs_router import router as jobs_router
+    from app.reports.router import router as reports_router
 
     api_router = APIRouter()
     if regulatory_router:
@@ -19,6 +20,8 @@ try:
         api_router.include_router(instruments_router)
     if jobs_router:
         api_router.include_router(jobs_router)
+    if reports_router:
+        api_router.include_router(reports_router)
 except ImportError:
     api_router = None
 

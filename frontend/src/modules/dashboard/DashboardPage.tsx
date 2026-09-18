@@ -1,0 +1,32 @@
+import { Activity, ArrowRight, CalendarClock, CheckCircle2, ClipboardCheck, FilePlus2, FileText, RotateCcw, Search, TriangleAlert } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { DashboardMetrics, JobSummary, ReportSummary, dashboardApi } from '../../services/api/client';
+import { loadJobs, loadReports } from '../reports/reportData';
+
+const pretty = (value?: string) => value?.replace(/_/g, ' ') || 'Not recorded';
+const date = (value?: string | null) => value ? new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(value)) : '—';
+const instrument = (job: JobSummary) => String(job.instrument_snapshot?.model_name || job.instrument_snapshot?.model_number || job.instrument_id);
+
+export function DashboardPage() {
+  const [jobs, setJobs] = useState<JobSummary[]>([]), [reports, setReports] = useState<ReportSummary[]>([]), [metrics, setMetrics] = useState<DashboardMetrics | null>(null), [demo, setDemo] = useState(false), [loading, setLoading] = useState(true);
+  useEffect(() => {
+    void Promise.all([
+      dashboardApi.metrics().then((response) => ({ data: response.data, isDemo: false })).catch(() => ({ data: null, isDemo: true })),
+      loadJobs(),
+      loadReports(),
+    ]).then(([metricData, jobData, reportData]) => {
+      setMetrics(metricData.data);
+      setJobs(jobData.data);
+      setReports(reportData.data);
+      setDemo(metricData.isDemo || jobData.isDemo || reportData.isDemo);
+    }).finally(() => setLoading(false));
+  }, []);
+  const count = (states: string[]) => jobs.filter((job) => states.includes(String(job.status).toUpperCase())).length;
+  const fallbackMetrics: DashboardMetrics = { active_jobs: count(['CREATED', 'VALIDATED', 'TEST_PLAN_GENERATED', 'READY_FOR_TEST', 'IN_TESTING']), pending_reviews: count(['UNDER_REVIEW', 'TEST_COMPLETED']), failed_tests: count(['REJECTED']), retests: jobs.filter((job) => job.job_type === 'RETEST').length, completed_jobs: count(['APPROVED', 'CLOSED', 'CERTIFIED']) };
+  const values = metrics || fallbackMetrics;
+  const cards = [['Active Jobs', values.active_jobs ?? 0, 'Work currently progressing', Activity], ['Pending Reviews', values.pending_reviews ?? 0, 'Awaiting technical decision', ClipboardCheck], ['Failed Tests', values.failed_tests ?? 0, 'Outcomes requiring action', TriangleAlert], ['Retests', values.retests ?? 0, 'Follow-up verification work', RotateCcw], ['Completed Jobs', values.completed_jobs ?? 0, 'Closed or approved records', CheckCircle2], ['Verification Due', values.verification_due ?? '—', 'Due within the next 30 days', CalendarClock]] as const;
+  return <section className="page-section" aria-labelledby="dashboard-title"><div className="page-heading"><div><p className="eyebrow">Operational overview</p><h1 id="dashboard-title">Verification dashboard</h1><p className="page-description">Controlled visibility of NAWI verification work, document output, and review queues.</p></div><span className="page-status">{loading ? 'Loading operations' : demo ? 'Demo / fallback data shown' : 'Live operational data'}</span></div>{demo && <div className="notice info">One or more operational services are unavailable, so representative fallback records or derived metrics are shown. They are not regulatory or certificate data.</div>}<div className="metric-grid">{cards.map(([label, value, context, Icon]) => <Link className="metric-card metric-link" to="/archive" key={label}><div className="metric-icon"><Icon size={20}/></div><div><h2>{label}</h2><p>{context}</p><strong className="metric-value">{loading ? '—' : value}</strong></div><ArrowRight size={17} className="metric-arrow"/></Link>)}</div><div className="dashboard-grid"><section className="content-panel"><div className="panel-heading panel-heading-split"><div><p className="eyebrow">Document output</p><h2>Recent reports</h2><p>Latest controlled report records and generation status.</p></div><Link className="table-link" to="/reports">View register <ArrowRight size={14}/></Link></div><DashboardTable reports={reports.slice(0, 4)} /></section><aside className="content-panel quick-actions"><div className="panel-heading"><FilePlus2 size={20}/><div><h2>Quick actions</h2><p>Common report and record tasks.</p></div></div>{[[FilePlus2, 'Generate report', 'Start with an approved or closed job', '/reports'], [Search, 'Search archive', 'Find retained report and job records', '/archive'], [ClipboardCheck, 'View pending reviews', 'Filter work awaiting review', '/archive'], [Activity, 'View active jobs', 'Review the live job queue', '/archive']].map(([Icon, title, description, to]) => { const ActionIcon = Icon as typeof Activity; return <Link className="quick-action" to={to as string} key={title as string}><ActionIcon size={17}/><span><strong>{title as string}</strong><small>{description as string}</small></span><ArrowRight size={16}/></Link>; })}</aside><section className="content-panel dashboard-jobs"><div className="panel-heading panel-heading-split"><div><p className="eyebrow">Workflow</p><h2>Job overview</h2><p>Current assignments and their workflow stage.</p></div><Link className="table-link" to="/archive">Search jobs <ArrowRight size={14}/></Link></div><div className="job-list">{loading ? <div className="table-state">Loading jobs…</div> : jobs.slice(0, 5).map((job) => <div className="job-row" key={job.job_id}><div><strong>{job.job_number || job.job_id}</strong><small>{instrument(job)} · {pretty(job.job_type)}</small></div><div><span className={`status-badge ${String(job.status).toLowerCase()}`}>{pretty(job.status)}</span><small>{job.assigned_inspector_name || 'Inspector unassigned'}</small></div><Link className="table-link" to={`/archive?job_id=${encodeURIComponent(job.job_id)}`}>Open</Link></div>)}</div></section></div></section>;
+}
+
+function DashboardTable({ reports }: { reports: ReportSummary[] }) { return <div className="compact-table">{reports.length === 0 ? <div className="table-state">No report records available.</div> : reports.map((report) => <div className="compact-row" key={report.report_id}><FileText size={17}/><div><Link className="table-link" to={`/reports/${report.report_id}`}>{report.report_number}</Link><small>{pretty(report.report_type)} · {report.job_number || report.job_id}</small></div><div><span className={`status-badge ${report.report_status.toLowerCase()}`}>{pretty(report.report_status)}</span><small>{date(report.generated_at || report.created_at)}</small></div></div>)}</div>; }
