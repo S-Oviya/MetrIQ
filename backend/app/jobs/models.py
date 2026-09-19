@@ -113,13 +113,19 @@ class JobStatus(str, Enum):
     CLOSED = "CLOSED"                             # Certificate stamped & job finalized
     CANCELLED = "CANCELLED"                       # Aborted prior to completion
 
+    # P5 Canonical Lifecycle States
+    READY = "READY"
+    RETEST_REQUIRED = "RETEST_REQUIRED"
+    REVIEW = "REVIEW"
+    REPORT_GENERATED = "REPORT_GENERATED"
+
     # Backward compatibility synonyms
-    PLAN_GENERATED = "PLAN_GENERATED"             # Synonym for TEST_PLAN_GENERATED
-    ASSIGNED = "ASSIGNED"                         # Synonym for READY_FOR_TEST
-    IN_PROGRESS = "IN_PROGRESS"                   # Synonym for IN_TESTING
-    TESTS_COMPLETED = "TESTS_COMPLETED"           # Synonym for TEST_COMPLETED
-    SUBMITTED_FOR_REVIEW = "SUBMITTED_FOR_REVIEW" # Synonym for UNDER_REVIEW
-    CERTIFIED = "CERTIFIED"                       # Synonym for CLOSED
+    PLAN_GENERATED = "PLAN_GENERATED"
+    ASSIGNED = "ASSIGNED"
+    IN_PROGRESS = "IN_PROGRESS"
+    TESTS_COMPLETED = "TESTS_COMPLETED"
+    SUBMITTED_FOR_REVIEW = "SUBMITTED_FOR_REVIEW"
+    CERTIFIED = "CERTIFIED"
 
     @classmethod
     def from_value(cls, val: Any) -> "JobStatus":
@@ -140,6 +146,7 @@ class JobStatus(str, Enum):
             JobStatus.CLOSED,
             JobStatus.CERTIFIED,
             JobStatus.CANCELLED,
+            JobStatus.REPORT_GENERATED,
         )
 
     @property
@@ -289,6 +296,7 @@ class TestJob:
     Coordinates an instrument's testing workflow, statutory authority assignment,
     Person 2 pre-calculated test plan, regulatory profile references, and audit transition history.
     """
+    __test__ = False
     job_id: str
     instrument_id: str
     job_type: JobType = JobType.RE_VERIFICATION
@@ -335,8 +343,17 @@ class TestJob:
     state_history: List[JobStateTransitionRecord] = dc_field(default_factory=list)
     created_at: str = dc_field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = dc_field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    state_changed_at: Optional[str] = None
     completed_at: Optional[str] = None
     notes: str = ""
+    test_execution_data: Optional[Dict[str, Any]] = None
+    test_attempts: List[Dict[str, Any]] = dc_field(default_factory=list)
+    equipment_ids: List[str] = dc_field(default_factory=list)
+    test_standard_ids: List[str] = dc_field(default_factory=list)
+    environment_records: List[Dict[str, Any]] = dc_field(default_factory=list)
+    evidence_ids: List[str] = dc_field(default_factory=list)
+    current_review_id: Optional[str] = None
+    review_ids: List[str] = dc_field(default_factory=list)
 
     def __post_init__(self):
         if not self.job_number:
@@ -344,6 +361,8 @@ class TestJob:
             self.job_number = f"JOB/{year}/{self.job_id.split('-')[-1].upper()}"
         if not self.test_plan_reference and self.test_plan:
             self.test_plan_reference = f"TP-{self.job_id}"
+        if not self.state_changed_at:
+            self.state_changed_at = self.created_at
         if self.testing_centre_name and not self.assigned_laboratory:
             self.assigned_laboratory = self.testing_centre_name
         if self.assigned_laboratory and not self.testing_centre_name:
@@ -355,6 +374,20 @@ class TestJob:
                 self.manual_review_flag = True
         if not self.regulatory_rule_reference and self.regulatory_rule_references:
             self.regulatory_rule_reference = self.regulatory_rule_references[0]
+
+    @property
+    def id(self) -> str:
+        """Alias for job_id conforming to generic entity identifier requirements."""
+        return self.job_id
+
+    @id.setter
+    def id(self, val: str) -> None:
+        self.job_id = val
+
+    @property
+    def current_state(self) -> str:
+        """Convenience property for current lifecycle state name."""
+        return self.status.value if hasattr(self.status, "value") else str(self.status)
 
     @property
     def laboratory(self) -> Optional[str]:
@@ -376,15 +409,39 @@ class TestJob:
         """Convenience accessor for regulatory profile ID."""
         return self.regulatory_profile_id
 
+    @property
+    def latest_environment(self) -> Optional[Dict[str, Any]]:
+        """Returns the most recent environment condition record, or None."""
+        if self.environment_records:
+            return self.environment_records[-1]
+        return None
+
+    def get_attempts_for_test(self, test_id: str) -> List[Dict[str, Any]]:
+        """Returns all recorded test attempts for a specific test ID."""
+        clean = str(test_id or "").strip().upper()
+        return [
+            a for a in self.test_attempts
+            if str(a.get("test_id", "")).strip().upper() == clean
+        ]
+
+    def get_latest_attempt_for_test(self, test_id: str) -> Optional[Dict[str, Any]]:
+        """Returns the latest attempt for a given test ID, or None."""
+        attempts = self.get_attempts_for_test(test_id)
+        if attempts:
+            return max(attempts, key=lambda a: int(a.get("attempt_number", 0)))
+        return None
+
     def to_dict(self) -> Dict[str, Any]:
         """Converts TestJob entity to a serializable dictionary."""
         return {
+            "id": self.job_id,
             "job_id": self.job_id,
             "job_number": self.job_number,
             "instrument_id": self.instrument_id,
             "model_approval_id": self.model_approval_id,
             "job_type": self.job_type.value,
             "status": self.status.value,
+            "current_state": self.current_state,
             "priority": self.priority.value,
             "requested_date": self.requested_date,
             "created_date": self.created_date,
@@ -419,17 +476,27 @@ class TestJob:
             "state_history": [t.to_dict() for t in self.state_history],
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "state_changed_at": self.state_changed_at,
             "completed_at": self.completed_at,
             "notes": self.notes,
+            "test_execution_data": self.test_execution_data,
+            "test_attempts": list(self.test_attempts),
+            "equipment_ids": list(self.equipment_ids),
+            "test_standard_ids": list(self.test_standard_ids),
+            "environment_records": list(self.environment_records),
+            "latest_environment": self.latest_environment,
+            "evidence_ids": list(self.evidence_ids),
+            "current_review_id": self.current_review_id,
+            "review_ids": list(self.review_ids),
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TestJob":
         """Reconstructs TestJob entity from dictionary."""
-        j_id = str(data.get("job_id") or f"JOB-{uuid.uuid4().hex[:8].upper()}")
+        j_id = str(data.get("job_id") or data.get("id") or f"JOB-{uuid.uuid4().hex[:8].upper()}")
         inst_id = str(data.get("instrument_id") or "")
         j_type = JobType.from_value(data.get("job_type", "RE_VERIFICATION"))
-        j_status = JobStatus.from_value(data.get("status", "DRAFT"))
+        j_status = JobStatus.from_value(data.get("status") or data.get("current_state") or "DRAFT")
         j_prio = JobPriority.from_value(data.get("priority", "NORMAL"))
 
         routing_obj = StatutoryRoutingInfo.from_dict(data.get("statutory_routing"))
@@ -476,6 +543,15 @@ class TestJob:
             state_history=hist,
             created_at=str(data.get("created_at") or datetime.now(timezone.utc).isoformat()),
             updated_at=str(data.get("updated_at") or datetime.now(timezone.utc).isoformat()),
+            state_changed_at=data.get("state_changed_at") or data.get("created_at"),
             completed_at=data.get("completed_at"),
             notes=str(data.get("notes", "")),
+            test_execution_data=data.get("test_execution_data"),
+            test_attempts=list(data.get("test_attempts", [])),
+            equipment_ids=list(data.get("equipment_ids", [])),
+            test_standard_ids=list(data.get("test_standard_ids", [])),
+            environment_records=list(data.get("environment_records", [])),
+            evidence_ids=list(data.get("evidence_ids", [])),
+            current_review_id=data.get("current_review_id"),
+            review_ids=list(data.get("review_ids", [])),
         )

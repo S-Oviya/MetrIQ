@@ -28,6 +28,55 @@ if api_router is not None:
         instruments_router = None
 
     try:
+        from app.workflow.router import router as workflow_router
+        if workflow_router:
+            api_router.include_router(workflow_router)
+    except Exception:
+        workflow_router = None
+
+    try:
+        from app.equipment.router import router as equipment_router
+        if equipment_router:
+            api_router.include_router(equipment_router)
+    except Exception:
+        equipment_router = None
+
+    try:
+        from app.environment.router import router as environment_router
+        if environment_router:
+            api_router.include_router(environment_router)
+    except Exception:
+        environment_router = None
+
+    try:
+        from app.attempts.router import router as attempts_router
+        if attempts_router:
+            api_router.include_router(attempts_router)
+    except Exception:
+        attempts_router = None
+
+    try:
+        from app.evidence.router import router as evidence_router
+        if evidence_router:
+            api_router.include_router(evidence_router)
+    except Exception:
+        evidence_router = None
+
+    try:
+        from app.review.router import router as review_router
+        if review_router:
+            api_router.include_router(review_router)
+    except Exception:
+        review_router = None
+
+    try:
+        from app.audit.router import router as audit_router
+        if audit_router:
+            api_router.include_router(audit_router)
+    except Exception:
+        audit_router = None
+
+    try:
         from app.api.jobs_router import router as jobs_router
         if jobs_router:
             api_router.include_router(jobs_router)
@@ -133,6 +182,65 @@ __all__ = [
     "CalculationService",
     "calculate_mpe_service",
     "execute_test_service",
+    # Person 5 Services
+    "WorkflowService",
+    "WORKFLOW_SERVICE",
+    "WorkflowStateMachine",
+    "WorkflowStateTransitionError",
+    "transition_job",
+    "transitionJob",
+    "EquipmentService",
+    "EQUIPMENT_SERVICE",
+    "Equipment",
+    "EquipmentStatus",
+    "TestStandard",
+    "CalibrationExpiredError",
+    "EnvironmentService",
+    "ENVIRONMENT_SERVICE",
+    "EnvironmentCondition",
+    "EnvironmentValidationError",
+    "EnvironmentStageError",
+    "EnvironmentUpdateRestrictedError",
+    "AttemptService",
+    "ATTEMPT_SERVICE",
+    "TestAttempt",
+    "RetestRequest",
+    "AttemptStatus",
+    "AttemptNotFoundError",
+    "TestNotFoundError",
+    "AttemptValidationError",
+    "AttemptJobStateError",
+    "AttemptAlreadyCompletedError",
+    "DuplicateAttemptNumberError",
+    "EvidenceService",
+    "EVIDENCE_SERVICE",
+    "Evidence",
+    "EvidenceType",
+    "EvidenceStatus",
+    "EvidenceNotFoundError",
+    "EvidenceValidationError",
+    "EvidenceSecurityError",
+    "EvidenceWorkflowStateError",
+    "ReviewService",
+    "REVIEW_SERVICE",
+    "Review",
+    "ReviewStatus",
+    "ReviewDecision",
+    "ReviewRole",
+    "ReviewNotFoundError",
+    "ReviewEligibilityError",
+    "UnauthorizedReviewerError",
+    "InvalidReviewDecisionError",
+    "ReviewWorkflowStateError",
+    "AuditService",
+    "AUDIT_SERVICE",
+    "AuditLog",
+    "AuditAction",
+    "EntityType",
+    "AuditRepository",
+    "AUDIT_REPOSITORY",
+    "AuditImmutabilityError",
+    "record_audit",
 ]
 
 # Person 4 Services
@@ -141,3 +249,96 @@ from app.calculations.service import (
     calculate_mpe_service,
     execute_test_service,
 )
+
+# Person 5 Services
+from app.workflow.service import (
+    WorkflowService,
+    WORKFLOW_SERVICE,
+    transition_job,
+    transitionJob,
+)
+from app.workflow.state_machine import (
+    WorkflowStateMachine,
+    WorkflowStateTransitionError,
+)
+from app.equipment.service import (
+    EquipmentService,
+    EQUIPMENT_SERVICE,
+    CalibrationExpiredError,
+)
+from app.equipment.models import (
+    Equipment,
+    EquipmentStatus,
+    TestStandard,
+)
+from app.environment.service import (
+    EnvironmentService,
+    ENVIRONMENT_SERVICE,
+    EnvironmentValidationError,
+    EnvironmentStageError,
+    EnvironmentUpdateRestrictedError,
+)
+from app.environment.models import (
+    EnvironmentCondition,
+)
+from app.attempts.service import (
+    AttemptService,
+    ATTEMPT_SERVICE,
+    AttemptNotFoundError,
+    TestNotFoundError,
+    AttemptValidationError,
+    AttemptJobStateError,
+    AttemptAlreadyCompletedError,
+    DuplicateAttemptNumberError,
+)
+from app.attempts.models import (
+    TestAttempt,
+    RetestRequest,
+    AttemptStatus,
+)
+from app.evidence.service import (
+    EvidenceService,
+    EVIDENCE_SERVICE,
+    EvidenceNotFoundError,
+    EvidenceValidationError,
+    EvidenceSecurityError,
+    EvidenceWorkflowStateError,
+)
+from app.evidence.models import (
+    Evidence,
+    EvidenceType,
+    EvidenceStatus,
+)
+from app.review.service import (
+    ReviewService,
+    REVIEW_SERVICE,
+    ReviewNotFoundError,
+    ReviewEligibilityError,
+    UnauthorizedReviewerError,
+    InvalidReviewDecisionError,
+    ReviewWorkflowStateError,
+)
+from app.review.models import (
+    Review,
+    ReviewStatus,
+    ReviewDecision,
+    ReviewRole,
+)
+from app.audit.service import (
+    AuditService,
+    AUDIT_SERVICE,
+    record_audit,
+)
+from app.audit.models import (
+    AuditLog,
+    AuditAction,
+    EntityType,
+)
+from app.audit.repository import (
+    AuditRepository,
+    AUDIT_REPOSITORY,
+    AuditImmutabilityError,
+)
+
+
+
