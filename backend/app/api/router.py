@@ -8,22 +8,45 @@ from typing import Dict, Any, Optional
 
 try:
     from fastapi import APIRouter
-    from app.regulatory.router import router as regulatory_router
-    from app.api.instruments_router import router as instruments_router
-    from app.api.jobs_router import router as jobs_router
-    from app.reports.router import router as reports_router
-
     api_router = APIRouter()
-    if regulatory_router:
-        api_router.include_router(regulatory_router)
-    if instruments_router:
-        api_router.include_router(instruments_router)
-    if jobs_router:
-        api_router.include_router(jobs_router)
-    if reports_router:
-        api_router.include_router(reports_router)
 except ImportError:
     api_router = None
+
+if api_router is not None:
+    try:
+        from app.regulatory.router import router as regulatory_router
+        if regulatory_router:
+            api_router.include_router(regulatory_router)
+    except Exception:
+        regulatory_router = None
+
+    try:
+        from app.api.instruments_router import router as instruments_router
+        if instruments_router:
+            api_router.include_router(instruments_router)
+    except Exception:
+        instruments_router = None
+
+    try:
+        from app.api.jobs_router import router as jobs_router
+        if jobs_router:
+            api_router.include_router(jobs_router)
+    except Exception:
+        jobs_router = None
+
+    try:
+        from app.calculations.router import router as calculations_router
+        if calculations_router:
+            api_router.include_router(calculations_router)
+    except Exception:
+        calculations_router = None
+
+    try:
+        from app.reports.router import router as reports_router
+        if reports_router:
+            api_router.include_router(reports_router)
+    except Exception:
+        reports_router = None
 
 # High-level service functions for Person 1 direct invocation
 from app.regulatory.api import (
@@ -106,4 +129,15 @@ __all__ = [
     "api_complete_verification_job",
     "success_envelope",
     "error_envelope",
+    # Person 4 Services
+    "CalculationService",
+    "calculate_mpe_service",
+    "execute_test_service",
 ]
+
+# Person 4 Services
+from app.calculations.service import (
+    CalculationService,
+    calculate_mpe_service,
+    execute_test_service,
+)
