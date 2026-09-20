@@ -5,6 +5,8 @@ Exposes RESTful endpoints for Weighing Instrument Registry, Model Approval
 Certificates, Physical Seals, and Metrological Pre-validation.
 """
 
+from typing import Any, Dict, List, Optional
+
 try:
     from fastapi import APIRouter, Body, HTTPException, Path, Query, status
     HAS_FASTAPI = True

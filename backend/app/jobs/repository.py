@@ -116,6 +116,12 @@ class TestJobRepository:
         with self._lock:
             return len(self._jobs)
 
+    def clear(self) -> None:
+        """Clears all jobs and indices (used for testing isolation)."""
+        with self._lock:
+            self._jobs.clear()
+            self._instrument_index.clear()
+
 
 # Global singleton instance for application runtime
 TEST_JOB_REPOSITORY = TestJobRepository()
