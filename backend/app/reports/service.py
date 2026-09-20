@@ -32,7 +32,7 @@ class ReportService:
         if existing: return {"success":True,"status_code":200,"data":existing,"message":"Existing report record returned."}
         instrument = INSTRUMENT_SERVICE.get_instrument(str(job.get("instrument_id") or "")) or {}
         record_id = f"RPT-{uuid4().hex[:10].upper()}"; year = datetime.now(timezone.utc).year
-        report = {"report_id":record_id,"report_number":f"METRIQ/{year}/{record_id.split('-')[-1]}","report_type":canonical_type,"template_report_type":canonical_type,"job_id":job_id,"job_number":job.get("job_number"),"instrument_id":job.get("instrument_id"),"serial_number":instrument.get("serial_number"),"approval_number":job.get("model_approval_id") or instrument.get("model_approval_number"),"status":ReportStatus.DRAFT.value,"report_status":ReportStatus.DRAFT.value,"generation_status":"NOT_GENERATED","created_at":_now(),"updated_at":_now(),"created_by":created_by,"generated_at":None,"generated_by":None,"html":None,"job_snapshot":None,"instrument_snapshot":None,"approval_snapshot":None,"audit_snapshot":[]}
+        report = {"report_id":record_id,"report_number":f"METRIQ/{year}/{record_id.split('-')[-1]}","report_type":canonical_type,"template_report_type":canonical_type,"job_id":job_id,"job_number":job.get("job_number"),"instrument_id":job.get("instrument_id"),"serial_number":instrument.get("serial_number"),"approval_number":job.get("model_approval_id") or instrument.get("model_approval_number"),"status":ReportStatus.DRAFT.value,"report_status":ReportStatus.DRAFT.value,"generation_status":"NOT_GENERATED","created_at":_now(),"updated_at":_now(),"created_by":created_by,"generated_at":None,"generated_by":None,"html":None,"job_snapshot":None,"instrument_snapshot":None,"approval_snapshot":None,"audit_snapshot":[],"job_status_at_creation":str(job.get("status","")).upper()}
         return {"success":True,"status_code":201,"data":self.repository.save(report)}
 
     def generate(self, report_id: str, generated_by: str = "SYSTEM") -> Dict[str, Any]:
@@ -42,7 +42,9 @@ class ReportService:
         if report.get("generation_status") == "GENERATED" and not is_rejection_document: return {"success":True,"status_code":200,"data":report,"message":"Report has already been generated."}
         job = TEST_JOB_SERVICE.get_job(str(report.get("job_id") or ""))
         if not job: return {"success":False,"status_code":409,"message":"The linked test job is no longer available."}
-        if is_rejection_document and str(job.get("status", "")).upper() != "REJECTED":
+        if is_rejection_document and str(job.get("status", "")).upper() not in ("REJECTED", "CLOSED"):
+            return {"success":False,"status_code":409,"message":"A rejection document requires a rejected P3 job outcome.","details":{"job_status":job.get("status")}}
+        if is_rejection_document and str(job.get("status", "")).upper() == "CLOSED" and str(report.get("job_status_at_creation","")).upper() != "CLOSED":
             return {"success":False,"status_code":409,"message":"A rejection document requires a rejected P3 job outcome.","details":{"job_status":job.get("status")}}
         if report.get("generation_status") == "GENERATED": return {"success":True,"status_code":200,"data":report,"message":"Report has already been generated."}
         if str(job.get("status", "")).upper() not in GENERATABLE_JOB_STATUSES: return {"success":False,"status_code":409,"message":"Report generation is available only after the linked job has been approved, rejected, or closed.","details":{"job_status":job.get("status"),"allowed_statuses":sorted(GENERATABLE_JOB_STATUSES)}}

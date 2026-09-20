@@ -50,6 +50,36 @@ from app.jobs.service import TEST_JOB_SERVICE, TestJobService
 
 
 # =============================================================================
+# Router/API boundary helper
+# =============================================================================
+
+def _q(value, default=None):
+    """
+    Strips FastAPI FieldInfo (Query/Path/Body) objects at the router boundary so
+    that direct Python calls from tests receive plain Python defaults instead of
+    FastAPI annotation objects.
+
+    When FastAPI processes an HTTP request, it injects the real parsed value and
+    this function is a no-op.  When a test calls the router function directly as
+    a plain Python function, the un-injected parameter retains its FieldInfo
+    default; _q() detects that and returns the caller-supplied `default` instead.
+    """
+    try:
+        from fastapi.fields import FieldInfo
+        if isinstance(value, FieldInfo):
+            return default
+    except ImportError:
+        pass
+    try:
+        from pydantic.fields import FieldInfo as PydanticFieldInfo
+        if isinstance(value, PydanticFieldInfo):
+            return default
+    except ImportError:
+        pass
+    return value
+
+
+# =============================================================================
 # Test Job CRUD Endpoints
 # =============================================================================
 
@@ -83,12 +113,12 @@ def list_jobs(
 ):
     """Lists test jobs with optional multi-parameter filters."""
     jobs = TEST_JOB_SERVICE.list_jobs(
-        status=status,
-        job_type=job_type,
-        instrument_id=instrument_id,
-        inspector_id=inspector_id,
-        testing_centre_id=testing_centre_id,
-        search=search,
+        status=_q(status),
+        job_type=_q(job_type),
+        instrument_id=_q(instrument_id),
+        inspector_id=_q(inspector_id),
+        testing_centre_id=_q(testing_centre_id),
+        search=_q(search),
     )
     return {
         "success": True,

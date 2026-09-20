@@ -49,6 +49,38 @@ from app.instruments.models import Instrument
 
 
 # =============================================================================
+# Router/API boundary helper
+# =============================================================================
+
+def _q(value, default=None):
+    """
+    Strips FastAPI FieldInfo (Query/Path/Body) objects at the router boundary so
+    that direct Python calls from tests receive plain Python defaults instead of
+    FastAPI annotation objects.
+
+    When FastAPI processes an HTTP request, it injects the real parsed value and
+    this function is a no-op.  When a test calls the router function directly as
+    a plain Python function, the un-injected parameter retains its FieldInfo
+    default; _q() detects that and returns the caller-supplied `default` instead.
+    """
+    # FieldInfo is FastAPI's internal class used by Query/Path/Body
+    try:
+        from fastapi.fields import FieldInfo
+        if isinstance(value, FieldInfo):
+            return default
+    except ImportError:
+        pass
+    # Also guard against pydantic v1 FieldInfo used in older FastAPI versions
+    try:
+        from pydantic.fields import FieldInfo as PydanticFieldInfo
+        if isinstance(value, PydanticFieldInfo):
+            return default
+    except ImportError:
+        pass
+    return value
+
+
+# =============================================================================
 # Instrument Registry Endpoints
 # =============================================================================
 
@@ -86,16 +118,16 @@ def list_instruments(
 ):
     """Lists registered instruments matching search criteria."""
     items = INSTRUMENT_SERVICE.list_instruments(
-        status=status,
-        accuracy_class=accuracy_class,
-        instrument_type=instrument_type,
-        usage_type=usage_type,
-        verification_status=verification_status,
-        approval_status=approval_status,
-        gatc_code=gatc_code,
-        manufacturer=manufacturer,
-        customer_name=customer,
-        search=search,
+        status=_q(status),
+        accuracy_class=_q(accuracy_class),
+        instrument_type=_q(instrument_type),
+        usage_type=_q(usage_type),
+        verification_status=_q(verification_status),
+        approval_status=_q(approval_status),
+        gatc_code=_q(gatc_code),
+        manufacturer=_q(manufacturer),
+        customer_name=_q(customer),
+        search=_q(search),
     )
     return {
         "success": True,
@@ -128,10 +160,10 @@ def identify_instruments_requiring_verification(
 ):
     """Identifies all instruments currently requiring statutory verification."""
     return INSTRUMENT_SERVICE.identify_instruments_requiring_verification(
-        as_of_date=as_of_date,
-        state=state,
-        reminder_window_days=reminder_window_days,
-        include_manual_review=include_manual_review,
+        as_of_date=_q(as_of_date),
+        state=_q(state),
+        reminder_window_days=_q(reminder_window_days, 30),
+        include_manual_review=_q(include_manual_review, True),
     )
 
 
@@ -239,12 +271,12 @@ def list_model_approvals(
 ):
     """Lists registered Model Approval records with multi-field filtering."""
     records = INSTRUMENT_SERVICE.list_model_approvals(
-        manufacturer=manufacturer,
-        accuracy_class=accuracy_class,
-        status=status,
-        instrument_type=instrument_type,
-        search=search,
-        valid_only=valid_only,
+        manufacturer=_q(manufacturer),
+        accuracy_class=_q(accuracy_class),
+        status=_q(status),
+        instrument_type=_q(instrument_type),
+        search=_q(search),
+        valid_only=_q(valid_only, False),
     )
     return {
         "success": True,
@@ -253,7 +285,21 @@ def list_model_approvals(
     }
 
 
-@_get("/model-approvals/{reference}")
+@_get("/model-approvals/{reference:path}/instruments")
+def get_model_approval_instruments(reference: str = Path(...)):
+    """Lists all instruments associated with this model approval."""
+    record = INSTRUMENT_SERVICE.get_model_approval(reference)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Model approval '{reference}' not found.")
+    return {
+        "success": True,
+        "reference": reference,
+        "count": len(record.get("associated_instrument_ids", [])),
+        "data": record.get("associated_instrument_ids", []),
+    }
+
+
+@_get("/model-approvals/{reference:path}")
 def get_model_approval(reference: str = Path(...)):
     """Retrieves a specific Model Approval record by certificate number or application reference."""
     record = INSTRUMENT_SERVICE.get_model_approval(reference)
@@ -262,8 +308,8 @@ def get_model_approval(reference: str = Path(...)):
     return {"success": True, "data": record}
 
 
-@_put("/model-approvals/{reference}")
-@_patch("/model-approvals/{reference}")
+@_put("/model-approvals/{reference:path}")
+@_patch("/model-approvals/{reference:path}")
 def update_model_approval(
     reference: str = Path(...),
     payload: Dict[str, Any] = Body(...),
@@ -275,7 +321,7 @@ def update_model_approval(
     return res
 
 
-@_post("/model-approvals/{reference}/transition")
+@_post("/model-approvals/{reference:path}/transition")
 def transition_model_approval(
     reference: str = Path(...),
     payload: Dict[str, Any] = Body(...),
@@ -291,7 +337,7 @@ def transition_model_approval(
     return res
 
 
-@_post("/model-approvals/{reference}/link-instrument")
+@_post("/model-approvals/{reference:path}/link-instrument")
 def link_instrument_to_model_approval(
     reference: str = Path(...),
     payload: Dict[str, Any] = Body(...),
@@ -304,20 +350,6 @@ def link_instrument_to_model_approval(
     if not res.get("success"):
         raise HTTPException(status_code=res.get("status_code", 404), detail=res.get("message"))
     return res
-
-
-@_get("/model-approvals/{reference}/instruments")
-def get_model_approval_instruments(reference: str = Path(...)):
-    """Lists all instruments associated with this model approval."""
-    record = INSTRUMENT_SERVICE.get_model_approval(reference)
-    if not record:
-        raise HTTPException(status_code=404, detail=f"Model approval '{reference}' not found.")
-    return {
-        "success": True,
-        "reference": reference,
-        "count": len(record.get("associated_instrument_ids", [])),
-        "data": record.get("associated_instrument_ids", []),
-    }
 
 
 @_post("/model-approvals/verify-instrument")
@@ -388,8 +420,8 @@ def schedule_instrument_verification(
     return res
 
 
-@_post("/instruments/{instrument_id}/verification-job")
-@_post("/instruments/{instrument_id}/create-verification-job")
+@_post("/instruments/{instrument_id}/verification-job", status_code=status.HTTP_201_CREATED)
+@_post("/instruments/{instrument_id}/create-verification-job", status_code=status.HTTP_201_CREATED)
 def create_instrument_verification_job(
     instrument_id: str = Path(...),
     payload: Dict[str, Any] = Body(...),

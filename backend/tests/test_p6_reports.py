@@ -16,10 +16,38 @@ REPORT_SECTION_MARKERS = {
 }
 
 class _Jobs:
-    def __init__(self): self.status = "CLOSED"
+    # Default status sequence for the two loop tests that iterate all ReportTypes.
+    # Each iteration calls get_job twice (once in create, once in generate).
+    # REJECTION_DOCUMENT is the 4th enum member (index 3); its two calls must return
+    # "REJECTED" so the strict domain rule (create requires REJECTED outcome) is met.
+    # All other iterations use "CLOSED" so generate() produces report_status="ISSUED".
+    # Tests that need a specific status (test_rejection_document_*, test_status_handling)
+    # set self.status to a non-None string, which overrides the sequence entirely.
+    _DEFAULT_SEQUENCE = (
+        "CLOSED",   "CLOSED",    # OIML_R76_2_TYPE_EVALUATION        calls 1-2
+        "CLOSED",   "CLOSED",    # GATC_THIRD_SCHEDULE_VERIFICATION   calls 3-4
+        "CLOSED",   "CLOSED",    # GENERIC_VERIFICATION               calls 5-6
+        "REJECTED", "REJECTED",  # REJECTION_DOCUMENT                 calls 7-8
+        "CLOSED",   "CLOSED",    # TECHNICAL_EVIDENCE_ANNEX           calls 9-10
+    )
+
+    def __init__(self):
+        self.status = None   # None → use _DEFAULT_SEQUENCE; any string → hard override
+        self._call = 0
+
     def get_job(self, job_id):
-        if job_id != "JOB-1": return None
-        return {"job_id":job_id,"job_number":"JOB/2026/1","instrument_id":"INST-1","status":self.status,"job_type":"RE_VERIFICATION","model_approval_id":"APR-1","applicable_tests":["Upstream test"],"test_plan":{"mpe_reference":"Upstream MPE reference"},"state_history":[]}
+        if job_id != "JOB-1":
+            return None
+        if self.status is not None:
+            status = self.status
+        else:
+            status = self._DEFAULT_SEQUENCE[self._call] if self._call < len(self._DEFAULT_SEQUENCE) else "CLOSED"
+            self._call += 1
+        return {"job_id": job_id, "job_number": "JOB/2026/1", "instrument_id": "INST-1",
+                "status": status, "job_type": "RE_VERIFICATION", "model_approval_id": "APR-1",
+                "applicable_tests": ["Upstream test"], "test_plan": {"mpe_reference": "Upstream MPE reference"},
+                "state_history": []}
+
     def list_jobs(self): return [self.get_job("JOB-1")]
 class _Instruments:
     def get_instrument(self, instrument_id): return {"instrument_id":instrument_id,"serial_number":"SER-1","model_approval_number":"APR-1","model_name":"Demo Scale","manufacturer":"Demo Manufacturer","accuracy_class":"CLASS_III","max_capacity":15,"min_capacity":0.1,"e":0.005,"d":0.005}

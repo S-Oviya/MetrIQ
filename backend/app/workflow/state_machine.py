@@ -51,6 +51,7 @@ class WorkflowStateMachine:
     VALID_TRANSITIONS: Dict[JobStatus, Set[JobStatus]] = {
         JobStatus.DRAFT: {JobStatus.READY},
         JobStatus.READY: {JobStatus.IN_PROGRESS},
+        JobStatus.ASSIGNED: {JobStatus.IN_PROGRESS, JobStatus.READY_FOR_TEST},
         JobStatus.IN_PROGRESS: {JobStatus.REVIEW, JobStatus.RETEST_REQUIRED},
         JobStatus.RETEST_REQUIRED: {JobStatus.IN_PROGRESS},
         JobStatus.REVIEW: {JobStatus.APPROVED, JobStatus.REJECTED, JobStatus.IN_PROGRESS},
