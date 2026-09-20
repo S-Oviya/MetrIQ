@@ -1,14 +1,15 @@
 """FastAPI surface for P6 reports, dashboard metrics, and archive retrieval."""
 from typing import Any, Optional
 try:
-    from fastapi import APIRouter, Body, HTTPException
-    from fastapi.responses import HTMLResponse
+    from fastapi import APIRouter, Body, HTTPException, Query
+    from fastapi.responses import HTMLResponse, Response
     router = APIRouter(tags=["Reports & Archive"])
 except ImportError:  # Keeps pure-Python service/test environments importable.
     router = None
     class HTTPException(Exception):
         def __init__(self, status_code: int, detail: Any): self.status_code, self.detail = status_code, detail
     def Body(default=None, **kwargs: Any): return default
+    def Query(default=None, **kwargs: Any): return default
     def _route(*args: Any, **kwargs: Any):
         def decorate(function: Any): return function
         return decorate
@@ -17,6 +18,12 @@ except ImportError:  # Keeps pure-Python service/test environments importable.
         post = staticmethod(_route)
     router = _NoFastApiRouter()
     class HTMLResponse(str): pass
+    class Response:
+        def __init__(self, content=None, media_type=None, headers=None, status_code=200):
+            self.content = content
+            self.media_type = media_type
+            self.headers = headers or {}
+            self.status_code = status_code
 from app.api.schemas import success_envelope
 from .service import REPORT_SERVICE
 
@@ -39,6 +46,36 @@ def report_html(report_id: str):
     html=REPORT_SERVICE.get_html(report_id)
     if not html: raise HTTPException(status_code=404,detail={"message":"Generated report HTML was not found."})
     return HTMLResponse(html)
+@router.get("/reports/{report_id}/pdf")
+def report_pdf(report_id: str, download: bool = False):
+    report = REPORT_SERVICE.get(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail={"message": f"Report '{report_id}' was not found."})
+    if report.get("generation_status") != "GENERATED":
+        raise HTTPException(status_code=409, detail={"message": "Report must be generated before opening or downloading its PDF."})
+    try:
+        pdf_bytes = REPORT_SERVICE.get_pdf(report_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail={"message": f"Failed to generate report PDF: {exc}"})
+    if not pdf_bytes:
+        raise HTTPException(status_code=404, detail={"message": "Report PDF could not be generated."})
+
+    report_num = str(report.get("report_number") or report_id).replace("/", "_").replace("\\", "_")
+    filename = f"{report_num}.pdf"
+    disposition = "attachment" if download else "inline"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{filename}"',
+            "Content-Length": str(len(pdf_bytes)),
+        },
+    )
+@router.get("/reports/{report_id}/download")
+def download_report(report_id: str):
+    """Direct downloadable PDF endpoint for the report."""
+    return report_pdf(report_id=report_id, download=True)
 @router.get("/reports/{report_id}")
 def get_report(report_id: str):
     report=REPORT_SERVICE.get(report_id)

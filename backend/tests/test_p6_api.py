@@ -87,6 +87,8 @@ class P6MountedApiTests(unittest.TestCase):
             ("/reports/generate", "POST"),
             ("/reports/{report_id}", "GET"),
             ("/reports/{report_id}/html", "GET"),
+            ("/reports/{report_id}/pdf", "GET"),
+            ("/reports/{report_id}/download", "GET"),
             ("/reports/{report_id}/generate", "POST"),
             ("/reports/{report_id}/preview", "GET"),
             ("/dashboard/metrics", "GET"),
@@ -114,11 +116,12 @@ class P6MountedApiTests(unittest.TestCase):
         retrieved = self.client.get(f"/reports/{report_id}")
         self.assertEqual(200, retrieved.status_code)
         self.assertEqual("DRAFT", retrieved.json()["data"]["report_status"])
-        self.assertEqual(409, self.client.get(f"/reports/{report_id}/preview").status_code)
+        self.assertEqual(409, self.client.get(f"/reports/{report_id}/pdf").status_code)
 
         generated = self.client.post(f"/reports/{report_id}/generate")
         self.assertEqual(200, generated.status_code)
         self.assertEqual("GENERATED", generated.json()["data"]["generation_status"])
+        self.assertTrue(generated.json()["data"]["has_pdf"])
 
         preview = self.client.get(f"/reports/{report_id}/preview")
         self.assertEqual(200, preview.status_code)
@@ -129,6 +132,17 @@ class P6MountedApiTests(unittest.TestCase):
         self.assertIn("text/html", html.headers["content-type"])
         self.assertIn("METRIQ", html.text)
 
+        pdf_resp = self.client.get(f"/reports/{report_id}/pdf")
+        self.assertEqual(200, pdf_resp.status_code)
+        self.assertIn("application/pdf", pdf_resp.headers["content-type"])
+        self.assertTrue(pdf_resp.content.startswith(b"%PDF-"))
+
+        download_resp = self.client.get(f"/reports/{report_id}/download")
+        self.assertEqual(200, download_resp.status_code)
+        self.assertIn("application/pdf", download_resp.headers["content-type"])
+        self.assertIn("attachment;", download_resp.headers.get("content-disposition", ""))
+        self.assertTrue(download_resp.content.startswith(b"%PDF-"))
+
         archive = self.client.get("/archive/search", params={"job_id": "JOB-API-1", "report_type": "GENERIC_VERIFICATION", "report_status": "ISSUED"})
         self.assertEqual(200, archive.status_code)
         self.assertEqual(1, archive.json()["meta"]["count"])
@@ -137,6 +151,7 @@ class P6MountedApiTests(unittest.TestCase):
         response = self.client.post("/reports/generate", json={"job_id": "JOB-API-1", "report_type": "TECHNICAL_EVIDENCE_ANNEX"})
         self.assertEqual(200, response.status_code)
         self.assertEqual("GENERATED", response.json()["data"]["generation_status"])
+        self.assertTrue(response.json()["data"]["has_pdf"])
 
     def test_invalid_report_input_returns_4xx(self) -> None:
         response = self.client.post(
@@ -149,6 +164,8 @@ class P6MountedApiTests(unittest.TestCase):
         self.assertEqual(422, self.client.post("/reports", json={"job_id": "JOB-API-1"}).status_code)
         self.assertEqual(404, self.client.get("/reports/MISSING").status_code)
         self.assertEqual(404, self.client.get("/reports/MISSING/html").status_code)
+        self.assertEqual(404, self.client.get("/reports/MISSING/pdf").status_code)
+        self.assertEqual(404, self.client.get("/reports/MISSING/download").status_code)
         self.assertEqual(404, self.client.post("/reports/MISSING/generate").status_code)
 
     def test_rejection_document_requires_a_rejected_p3_job_outcome(self) -> None:

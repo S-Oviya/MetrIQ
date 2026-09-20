@@ -212,6 +212,17 @@ def pre_validate_instrument(
     return res
 
 
+@_get("/instruments/{instrument_id}/validate-metrology")
+def validate_instrument_metrology_by_id(
+    instrument_id: str = Path(...),
+):
+    """Validates existing registered instrument metrology against Person 2."""
+    inst = INSTRUMENT_SERVICE.get_instrument(instrument_id)
+    if not inst:
+        raise HTTPException(status_code=404, detail=f"Instrument '{instrument_id}' not found.")
+    return INSTRUMENT_SERVICE.validate_metrology(inst)
+
+
 # =============================================================================
 # Statutory Physical & Electronic Seal Endpoints
 # =============================================================================

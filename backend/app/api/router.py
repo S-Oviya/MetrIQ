@@ -91,6 +91,13 @@ if api_router is not None:
         calculations_router = None
 
     try:
+        from app.tests_execution.router import router as tests_execution_router
+        if tests_execution_router:
+            api_router.include_router(tests_execution_router)
+    except Exception:
+        tests_execution_router = None
+
+    try:
         from app.reports.router import router as reports_router
         if reports_router:
             api_router.include_router(reports_router)

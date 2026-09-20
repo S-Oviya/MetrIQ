@@ -91,21 +91,57 @@ class ReviewService:
         """
         Verifies whether a test job satisfies all prerequisites for review:
         1. Job must exist.
-        2. Job must be in IN_PROGRESS state.
-        3. Job must not be already APPROVED, REPORT_GENERATED, or terminal.
+        2. Job must be in a review-eligible state (IN_PROGRESS, IN_TESTING,
+           TEST_COMPLETED, TESTS_COMPLETED, READY_FOR_TEST, ASSIGNED, or
+           any P3 execution-complete status).
+        3. Job must not be already APPROVED, REPORT_GENERATED, CLOSED,
+           CERTIFIED, or CANCELLED.
         4. Job must have completed test execution data or recorded attempts.
         """
+        # All statuses from which a job may legitimately enter review
+        _REVIEW_ELIGIBLE_STATUSES = {
+            JobStatus.IN_PROGRESS,
+            JobStatus.IN_TESTING,
+            JobStatus.TEST_COMPLETED,
+            JobStatus.TESTS_COMPLETED,
+            JobStatus.READY_FOR_TEST,
+            JobStatus.ASSIGNED,
+            # P5 canonical aliases
+            JobStatus.REVIEW,               # already in review — allow re-submission
+            JobStatus.UNDER_REVIEW,
+            JobStatus.SUBMITTED_FOR_REVIEW,
+        }
+        _TERMINAL_STATUSES = {
+            JobStatus.APPROVED,
+            JobStatus.REPORT_GENERATED,
+            JobStatus.CLOSED,
+            JobStatus.CERTIFIED,
+            JobStatus.CANCELLED,
+        }
+
         job = self.jobs.get(job_id)
         if not job:
             return False, f"Job '{job_id}' not found.", None
 
-        # State check
+        # Already-terminal checks
         if job.status == JobStatus.APPROVED:
             return False, f"Job '{job_id}' is already APPROVED.", job
-        if job.status == JobStatus.REPORT_GENERATED:
-            return False, f"Job '{job_id}' has already completed certification (REPORT_GENERATED).", job
-        if job.status != JobStatus.IN_PROGRESS:
-            return False, f"Job '{job_id}' is in state '{job.status.value}'. Must be IN_PROGRESS to submit for review.", job
+        if job.status in (JobStatus.REPORT_GENERATED, JobStatus.CLOSED, JobStatus.CERTIFIED):
+            return False, f"Job '{job_id}' has already completed certification ({job.status.value}).", job
+        if job.status == JobStatus.CANCELLED:
+            return False, f"Job '{job_id}' has been cancelled and cannot enter review.", job
+
+        if job.status not in _REVIEW_ELIGIBLE_STATUSES:
+            return (
+                False,
+                (
+                    f"Job '{job_id}' is in state '{job.status.value}'. "
+                    f"Must be in one of: "
+                    f"{sorted(s.value for s in _REVIEW_ELIGIBLE_STATUSES)} "
+                    "to submit for review."
+                ),
+                job,
+            )
 
         # Execution data check
         has_execution_data = False
@@ -171,15 +207,26 @@ class ReviewService:
                 metadata=meta,
             )
 
-            # Transition job via existing WORKFLOW_SERVICE
-            updated_job = self.workflow.transition_job(
-                job_id=job.job_id,
-                target_state=JobStatus.REVIEW,
-                actor=submitted_by,
-                reason=str(comments or "Submitted for supervisory review"),
-                metadata={"review_id": review_id, "reviewer": review.reviewer},
-                test_execution_data=job.test_execution_data,
-            )
+            # Transition job via existing WORKFLOW_SERVICE.
+            # If the job is already in a review-stage status (e.g. auto-transitioned
+            # by TestExecutionService, or arrived via a P3 alias), skip the transition
+            # to avoid a self-transition error.
+            _ALREADY_IN_REVIEW = {
+                JobStatus.REVIEW,
+                JobStatus.UNDER_REVIEW,
+                JobStatus.SUBMITTED_FOR_REVIEW,
+            }
+            if job.status in _ALREADY_IN_REVIEW:
+                updated_job = job
+            else:
+                updated_job = self.workflow.transition_job(
+                    job_id=job.job_id,
+                    target_state=JobStatus.REVIEW,
+                    actor=submitted_by,
+                    reason=str(comments or "Submitted for supervisory review"),
+                    metadata={"review_id": review_id, "reviewer": review.reviewer},
+                    test_execution_data=job.test_execution_data,
+                )
 
             # Link review on job
             updated_job.current_review_id = review.id
@@ -237,15 +284,21 @@ class ReviewService:
             if not job:
                 raise JobNotFoundError(f"Job '{job_id}' not found.", job_id=job_id)
 
-            # 1. State check
-            if job.status != JobStatus.REVIEW:
+            # 1. State check — accept P5 REVIEW and its P3 aliases
+            _IN_REVIEW_STATUSES = {
+                JobStatus.REVIEW,
+                JobStatus.UNDER_REVIEW,
+                JobStatus.SUBMITTED_FOR_REVIEW,
+            }
+            if job.status not in _IN_REVIEW_STATUSES:
                 if job.status == JobStatus.APPROVED:
                     raise ReviewWorkflowStateError(
                         f"Cannot review job '{job_id}': job is already APPROVED.",
                         error_code="JOB_ALREADY_APPROVED",
                     )
                 raise ReviewWorkflowStateError(
-                    f"Cannot review job '{job_id}': current state is '{job.status.value}', expected REVIEW.",
+                    f"Cannot review job '{job_id}': current state is '{job.status.value}', "
+                    f"expected one of {sorted(s.value for s in _IN_REVIEW_STATUSES)}.",
                     error_code="INVALID_JOB_STATE",
                 )
 

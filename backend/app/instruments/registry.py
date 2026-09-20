@@ -6,9 +6,11 @@ for Non-Automatic Weighing Instruments.
 """
 
 from datetime import datetime, timezone
+import json
 import threading
 from typing import Any, Dict, List, Optional, Union
 
+from app.database.connection import db_session, init_db
 from app.regulatory.models import AccuracyClass, MassUnit
 from .models import (
     ApprovalStatus,
@@ -32,17 +34,118 @@ from .models import (
 )
 
 
+class _InstrumentsDict(dict):
+    """
+    Dict subclass that transparently synchronizes item assignments and clears
+    with the underlying SQLite database.
+    """
+
+    def __init__(self, registry: "InstrumentRegistry"):
+        super().__init__()
+        self._registry = registry
+
+    def clear(self) -> None:
+        super().clear()
+        if getattr(self._registry, "_persistent", False):
+            try:
+                with db_session() as conn:
+                    conn.execute("DELETE FROM instruments")
+            except Exception:
+                pass
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        super().__setitem__(key, value)
+        if getattr(self._registry, "_persistent", False):
+            try:
+                if hasattr(value, "to_dict"):
+                    self._registry._persist_to_db(value)
+            except Exception:
+                pass
+
+    def pop(self, key: str, default: Any = None) -> Any:
+        res = super().pop(key, default)
+        if getattr(self._registry, "_persistent", False):
+            try:
+                with db_session() as conn:
+                    conn.execute("DELETE FROM instruments WHERE instrument_id = ?", (key,))
+            except Exception:
+                pass
+        return res
+
+
 class InstrumentRegistry:
     """
     Thread-safe storage repository for weighing instruments with advanced
     metrological, serial, and customer search capabilities.
     """
 
-    def __init__(self) -> None:
-        self._instruments: Dict[str, Instrument] = {}
-        self._serial_index: Dict[str, str] = {}  # serial_number -> instrument_id
+    def __init__(self, persistent: bool = False) -> None:
         self._lock = threading.RLock()
+        self._persistent = persistent
+        self._instruments: Dict[str, Instrument] = _InstrumentsDict(self)
+        self._serial_index: Dict[str, str] = {}  # serial_number -> instrument_id
+        if self._persistent:
+            init_db()
+            self._load_from_db()
         self._load_seed_instruments()
+
+    def _persist_to_db(self, instrument: Instrument) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        created_at = getattr(instrument, "created_at", None) or now
+        updated_at = getattr(instrument, "updated_at", None) or now
+        data_json = json.dumps(instrument.to_dict())
+        acc_class = instrument.accuracy_class.roman if hasattr(instrument.accuracy_class, "roman") else str(instrument.accuracy_class)
+        unit_val = instrument.unit.value if hasattr(instrument.unit, "value") else str(instrument.unit)
+        status_val = instrument.status.value if hasattr(instrument.status, "value") else str(instrument.status)
+        cust_name = instrument.location.customer_name if getattr(instrument, "location", None) else "Standard Client"
+
+        with db_session() as conn:
+            conn.execute(
+                """
+                INSERT INTO instruments (
+                    instrument_id, serial_number, model_approval_number, accuracy_class,
+                    max_capacity, unit, status, customer_name, data_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(instrument_id) DO UPDATE SET
+                    serial_number=excluded.serial_number,
+                    model_approval_number=excluded.model_approval_number,
+                    accuracy_class=excluded.accuracy_class,
+                    max_capacity=excluded.max_capacity,
+                    unit=excluded.unit,
+                    status=excluded.status,
+                    customer_name=excluded.customer_name,
+                    data_json=excluded.data_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    instrument.instrument_id,
+                    instrument.serial_number,
+                    instrument.model_approval_number,
+                    acc_class,
+                    instrument.max_capacity,
+                    unit_val,
+                    status_val,
+                    cust_name,
+                    data_json,
+                    created_at,
+                    updated_at,
+                ),
+            )
+
+    def _load_from_db(self) -> None:
+        try:
+            with db_session() as conn:
+                rows = conn.execute("SELECT data_json FROM instruments").fetchall()
+                for r in rows:
+                    try:
+                        data = json.loads(r["data_json"])
+                        inst = Instrument.from_dict(data)
+                        super(_InstrumentsDict, self._instruments).__setitem__(inst.instrument_id, inst)
+                        self._serial_index[inst.serial_number.strip().upper()] = inst.instrument_id
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     def _load_seed_instruments(self) -> None:
         """Loads representative pre-configured instruments for immediate testing."""
@@ -268,12 +371,15 @@ class InstrumentRegistry:
             manufactured_date="2022-09-01",
             installed_date="2022-10-15",
         )
-        self.register(inst_3)
+        for inst in (inst_1, inst_2, inst_3):
+            if not self.exists(inst.instrument_id):
+                self.register(inst)
+            else:
+                self.get(inst.instrument_id)
 
     def register(self, instrument: Instrument) -> Instrument:
         """Registers a new instrument in the repository."""
         with self._lock:
-            # Enforce unique serial number if assigned to a different ID
             clean_serial = instrument.serial_number.strip().upper()
             if clean_serial in self._serial_index:
                 existing_id = self._serial_index[clean_serial]
@@ -282,6 +388,17 @@ class InstrumentRegistry:
                         f"Serial number '{instrument.serial_number}' is already registered "
                         f"under instrument ID '{existing_id}'."
                     )
+            if self._persistent:
+                with db_session() as conn:
+                    row = conn.execute(
+                        "SELECT instrument_id FROM instruments WHERE UPPER(serial_number) = ? AND instrument_id != ?",
+                        (clean_serial, instrument.instrument_id),
+                    ).fetchone()
+                    if row:
+                        raise ValueError(
+                            f"Serial number '{instrument.serial_number}' is already registered "
+                            f"under instrument ID '{row['instrument_id']}'."
+                        )
 
             self._instruments[instrument.instrument_id] = instrument
             self._serial_index[clean_serial] = instrument.instrument_id
@@ -290,7 +407,21 @@ class InstrumentRegistry:
     def get(self, instrument_id: str) -> Optional[Instrument]:
         """Retrieves an instrument by instrument_id."""
         with self._lock:
-            return self._instruments.get(instrument_id.strip())
+            clean_id = instrument_id.strip()
+            if clean_id in self._instruments:
+                return self._instruments[clean_id]
+            if self._persistent:
+                with db_session() as conn:
+                    row = conn.execute(
+                        "SELECT data_json FROM instruments WHERE instrument_id = ?",
+                        (clean_id,),
+                    ).fetchone()
+                    if row:
+                        inst = Instrument.from_dict(json.loads(row["data_json"]))
+                        super(_InstrumentsDict, self._instruments).__setitem__(inst.instrument_id, inst)
+                        self._serial_index[inst.serial_number.strip().upper()] = inst.instrument_id
+                        return inst
+            return None
 
     def get_by_serial(self, serial_number: str) -> Optional[Instrument]:
         """Retrieves an instrument by serial_number."""
@@ -298,18 +429,39 @@ class InstrumentRegistry:
             clean_serial = serial_number.strip().upper()
             inst_id = self._serial_index.get(clean_serial)
             if inst_id:
-                return self._instruments.get(inst_id)
+                return self.get(inst_id)
+            if self._persistent:
+                with db_session() as conn:
+                    row = conn.execute(
+                        "SELECT instrument_id, data_json FROM instruments WHERE UPPER(serial_number) = ?",
+                        (clean_serial,),
+                    ).fetchone()
+                    if row:
+                        inst = Instrument.from_dict(json.loads(row["data_json"]))
+                        super(_InstrumentsDict, self._instruments).__setitem__(inst.instrument_id, inst)
+                        self._serial_index[clean_serial] = inst.instrument_id
+                        return inst
             return None
 
     def exists(self, instrument_id: str) -> bool:
         """Checks if an instrument exists."""
         with self._lock:
-            return instrument_id.strip() in self._instruments
+            clean_id = instrument_id.strip()
+            if clean_id in self._instruments:
+                return True
+            if self._persistent:
+                with db_session() as conn:
+                    row = conn.execute(
+                        "SELECT 1 FROM instruments WHERE instrument_id = ?",
+                        (clean_id,),
+                    ).fetchone()
+                    return row is not None
+            return False
 
     def update(self, instrument: Instrument) -> Instrument:
         """Updates an existing instrument in the repository."""
         with self._lock:
-            if instrument.instrument_id not in self._instruments:
+            if not self.exists(instrument.instrument_id):
                 raise KeyError(f"Instrument with ID '{instrument.instrument_id}' does not exist.")
 
             instrument.updated_at = datetime.now(timezone.utc).isoformat()
@@ -318,12 +470,19 @@ class InstrumentRegistry:
     def delete(self, instrument_id: str) -> bool:
         """Deletes an instrument from the repository."""
         with self._lock:
-            inst = self._instruments.pop(instrument_id.strip(), None)
+            clean_id = instrument_id.strip()
+            deleted = False
+            if self._persistent:
+                with db_session() as conn:
+                    cur = conn.execute("DELETE FROM instruments WHERE instrument_id = ?", (clean_id,))
+                    if cur.rowcount > 0:
+                        deleted = True
+            inst = super(_InstrumentsDict, self._instruments).pop(clean_id, None)
             if inst:
                 clean_serial = inst.serial_number.strip().upper()
                 self._serial_index.pop(clean_serial, None)
                 return True
-            return False
+            return deleted
 
     def list_all(
         self,
@@ -340,6 +499,20 @@ class InstrumentRegistry:
     ) -> List[Instrument]:
         """Lists and filters instruments matching specified attributes."""
         with self._lock:
+            if self._persistent:
+                with db_session() as conn:
+                    rows = conn.execute("SELECT data_json FROM instruments").fetchall()
+                    for r in rows:
+                        try:
+                            data = json.loads(r["data_json"])
+                            iid = data.get("instrument_id")
+                            if iid and iid not in self._instruments:
+                                inst = Instrument.from_dict(data)
+                                super(_InstrumentsDict, self._instruments).__setitem__(inst.instrument_id, inst)
+                                self._serial_index[inst.serial_number.strip().upper()] = inst.instrument_id
+                        except Exception:
+                            pass
+
             results: List[Instrument] = []
             target_status = InstrumentStatus.from_value(status) if status is not None else None
             target_class = AccuracyClass.from_string(str(accuracy_class)) if accuracy_class is not None else None
@@ -393,8 +566,22 @@ class InstrumentRegistry:
     def count(self) -> int:
         """Returns total instrument count in registry."""
         with self._lock:
+            if self._persistent:
+                with db_session() as conn:
+                    row = conn.execute("SELECT COUNT(*) AS cnt FROM instruments").fetchone()
+                    db_cnt = row["cnt"] if row else 0
+                return max(len(self._instruments), db_cnt)
             return len(self._instruments)
+
+    def clear(self) -> None:
+        """Clears all instruments (used for testing isolation)."""
+        with self._lock:
+            self._instruments.clear()
+            self._serial_index.clear()
+            if self._persistent:
+                with db_session() as conn:
+                    conn.execute("DELETE FROM instruments")
 
 
 # Singleton instance for application runtime
-INSTRUMENT_REGISTRY = InstrumentRegistry()
+INSTRUMENT_REGISTRY = InstrumentRegistry(persistent=True)

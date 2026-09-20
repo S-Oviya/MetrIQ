@@ -1,12 +1,21 @@
 """MetrIQ FastAPI application entry point."""
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
+from app.database.connection import init_db
 
 
-app = FastAPI(title="MetrIQ API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize SQLite database tables, indexes, and directory structure on startup
+    init_db()
+    yield
+
+
+app = FastAPI(title="MetrIQ API", version="0.1.0", lifespan=lifespan)
 
 # The Vite development server is a separate browser origin from the API.
 app.add_middleware(

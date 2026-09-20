@@ -582,9 +582,11 @@ class CustomerLocation:
         }
 
     @classmethod
-    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "CustomerLocation":
+    def from_dict(cls, data: Optional[Union[Dict[str, Any], str]]) -> "CustomerLocation":
         if not data:
             return cls(customer_name="Standard Client")
+        if isinstance(data, str):
+            return cls(customer_name=data, address=data)
         return cls(
             customer_name=str(data.get("customer_name", "Standard Client")),
             contact_person=data.get("contact_person"),

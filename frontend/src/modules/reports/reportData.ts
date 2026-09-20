@@ -31,11 +31,27 @@ export function demoReportDetail(id: string): ReportDetail | undefined {
 export interface DataSource<T> { data: T; isDemo: boolean; error?: string }
 
 export async function loadReports(): Promise<DataSource<ReportSummary[]>> {
-  try { return { data: (await reportsApi.list()).data, isDemo: false }; }
-  catch (error) { return { data: demoReports, isDemo: true, error: error instanceof ApiError ? error.message : 'Report service unavailable.' }; }
+  try {
+    const res = await reportsApi.list();
+    return { data: res.data ?? [], isDemo: false };
+  } catch (error) {
+    return {
+      data: [],
+      isDemo: false,
+      error: error instanceof ApiError ? error.message : 'Report service unavailable.',
+    };
+  }
 }
 
 export async function loadJobs(): Promise<DataSource<JobSummary[]>> {
-  try { return { data: (await jobsApi.list()).data, isDemo: false }; }
-  catch (error) { return { data: demoJobs, isDemo: true, error: error instanceof ApiError ? error.message : 'Job service unavailable.' }; }
+  try {
+    const res = await jobsApi.list();
+    return { data: res.data ?? [], isDemo: false };
+  } catch (error) {
+    return {
+      data: [],
+      isDemo: false,
+      error: error instanceof ApiError ? error.message : 'Job service unavailable.',
+    };
+  }
 }

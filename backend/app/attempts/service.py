@@ -142,11 +142,25 @@ class AttemptService:
             # 2. Verify test exists / is applicable
             clean_test_id = self._validate_test_exists(job, test_id)
 
-            # 3. Verify job is in appropriate workflow state (IN_PROGRESS)
-            if job.status != JobStatus.IN_PROGRESS:
+            # 3. Verify job is in an execution-ready workflow state.
+            # IN_PROGRESS is the canonical execution state, but a job may arrive here
+            # directly from a P3 status (ASSIGNED, READY_FOR_TEST, IN_TESTING, etc.)
+            # when TestExecutionService has already auto-advanced it.  We accept all
+            # of those rather than requiring a precise IN_PROGRESS check, because the
+            # auto-advance in TestExecutionService may have already transitioned it or
+            # may be calling us as part of that transition.
+            _ATTEMPT_ALLOWED_STATUSES = {
+                JobStatus.IN_PROGRESS,
+                # P3 execution-ready aliases (accepted when arrived via TestExecutionService)
+                JobStatus.READY_FOR_TEST,
+                JobStatus.ASSIGNED,
+                JobStatus.IN_TESTING,
+            }
+            if job.status not in _ATTEMPT_ALLOWED_STATUSES:
                 raise AttemptJobStateError(
                     f"Cannot start test attempt: job '{job_id}' is in '{job.status.value}' state. "
-                    "Job must be in IN_PROGRESS state to execute test attempts.",
+                    f"Job must be in one of: "
+                    f"{sorted(s.value for s in _ATTEMPT_ALLOWED_STATUSES)}.",
                     error_code="JOB_NOT_IN_PROGRESS",
                 )
 

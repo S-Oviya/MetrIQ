@@ -77,8 +77,115 @@ class ReportServiceTests(unittest.TestCase):
             self.assertNotIn("undefined", generated["data"]["html"].lower())
             self.assertNotIn(">null<", generated["data"]["html"].lower())
             self.assertNotIn("[object object]", generated["data"]["html"].lower())
-            self.assertTrue(generated["data"]["contains_demo_data"])
+            pdf_bytes = self.service.get_pdf(created["data"]["report_id"])
+            self.assertIsNotNone(pdf_bytes)
+            self.assertTrue(pdf_bytes.startswith(b"%PDF-"))
+            self.assertGreater(len(pdf_bytes), 1000)
+            self.assertTrue(generated["data"]["has_pdf"])
+            self.assertTrue(generated["data"]["pdf_filename"].endswith(".pdf"))
             self.assertEqual("ISSUED" if report_type != ReportType.REJECTION_DOCUMENT else "REJECTED", generated["data"]["report_status"])
+
+    def test_pdf_generation_with_real_job_data_contains_actual_values(self):
+        import pypdfium2
+        real_job = {
+            "job_id": "JOB-REAL-100",
+            "job_number": "JOB/2026/REAL-100",
+            "instrument_id": "INST-REAL-100",
+            "status": "APPROVED",
+            "job_type": "INITIAL_VERIFICATION",
+            "model_approval_id": "APR-REAL-888",
+            "applicable_tests": ["WEIGHING_PERFORMANCE", "REPEATABILITY"],
+            "test_plan": {"mpe_reference": "MPE R76-1 Table 6"},
+            "state_history": [{"state": "APPROVED", "by": "Chief Inspector"}],
+            "test_attempts": [
+                {
+                    "id": "ATT-REAL-001",
+                    "test_id": "WEIGHING_PERFORMANCE",
+                    "attempt_number": 1,
+                    "result": "PASS",
+                    "operator": "Jane Inspector",
+                    "completed_at": "2026-09-20T10:30:00Z",
+                    "result_data": {
+                        "summary": "Measured error zero at max load",
+                        "standard_reference": "OIML R76-1 cl 3.5.1",
+                    },
+                }
+            ],
+            "review_history": [
+                {
+                    "reviewer": "Dr. Metrology Reviewer",
+                    "decision": "APPROVED",
+                    "reviewed_at": "2026-09-20T11:00:00Z",
+                    "comments": "High precision verified compliant with statutory limits.",
+                }
+            ],
+            "environment_records": [
+                {
+                    "temperature_celsius": 20.8,
+                    "relative_humidity": 48.5,
+                    "atmospheric_pressure_hpa": 1014.2,
+                    "recorded_by": "Jane Inspector",
+                    "recorded_at": "2026-09-20T09:00:00Z",
+                }
+            ],
+            "evidence_metadata": [
+                {
+                    "evidence_id": "EV-REAL-001",
+                    "file_name": "calibration_seal.png",
+                    "description": "Tamper evident seal applied to adjustment port",
+                }
+            ],
+        }
+        real_instrument = {
+            "instrument_id": "INST-REAL-100",
+            "serial_number": "SER-REAL-9999",
+            "model_approval_number": "APR-REAL-888",
+            "model_name": "Precision Benchmark Balancer",
+            "manufacturer": "MetrIQ Certified Metrology",
+            "accuracy_class": "CLASS_II",
+            "max_capacity": 5000,
+            "min_capacity": 20,
+            "e": 0.01,
+            "d": 0.001,
+        }
+
+        self.module.TEST_JOB_SERVICE.get_job = lambda j_id: real_job if j_id == "JOB-REAL-100" else None
+        self.module.INSTRUMENT_SERVICE.get_instrument = lambda i_id: real_instrument if i_id == "INST-REAL-100" else None
+
+        created = self.service.create("JOB-REAL-100", "GENERIC_VERIFICATION")
+        self.assertTrue(created["success"])
+        report_id = created["data"]["report_id"]
+
+        generated = self.service.generate(report_id, generated_by="Auditor Smith")
+        self.assertTrue(generated["success"])
+        self.assertFalse(generated["data"]["contains_demo_data"])
+        self.assertTrue(generated["data"]["has_pdf"])
+
+        pdf_bytes = self.service.get_pdf(report_id)
+        self.assertIsNotNone(pdf_bytes)
+        self.assertTrue(pdf_bytes.startswith(b"%PDF-"))
+
+        # Extract text from the real generated PDF
+        pdf = pypdfium2.PdfDocument(pdf_bytes)
+        self.assertGreaterEqual(len(pdf), 1)
+        text = "".join(page.get_textpage().get_text_range() for page in pdf)
+
+        # Assert all real data fields are embedded in the PDF
+        normalized_text = " ".join(text.split())
+        self.assertIn("JOB-REAL-100", normalized_text)
+        self.assertIn("SER-REAL-9999", normalized_text)
+        self.assertIn("Precision Benchmark Balancer", normalized_text)
+        self.assertIn("MetrIQ Certified Metrology", normalized_text)
+        self.assertIn("ATT-REAL-001", normalized_text)
+        self.assertIn("Jane Inspector", normalized_text)
+        self.assertIn("Measured error zero at max load", normalized_text)
+        self.assertIn("Dr. Metrology Reviewer", normalized_text)
+        self.assertIn("T=20.8", normalized_text)
+        self.assertIn("RH=48.5%", normalized_text)
+        self.assertIn("EV-REAL-001", normalized_text)
+        self.assertIn("calibration_seal.png", normalized_text)
+        self.assertIn("BACKEND-RECORDED REPORT SNAPSHOT", normalized_text)
+        self.assertNotIn("DEMO/MOCK DATA PRESENT", normalized_text)
 
     def test_report_templates_keep_upstream_snapshot_and_demo_safety_boundaries(self):
         for report_type in ReportType:

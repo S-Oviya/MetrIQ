@@ -41,6 +41,7 @@ class TestJobService:
     Orchestrates test job workflows, connecting:
     Instrument -> Test Job -> Regulatory Profile -> Automatic Test Plan -> Person 4 Execution.
     """
+    __test__ = False
 
     def __init__(
         self,
@@ -245,6 +246,32 @@ class TestJobService:
         # 12. Save job
         saved_job = self.jobs.save(job)
 
+        # Emit statutory audit event for job creation
+        try:
+            from app.audit.service import AUDIT_SERVICE
+            from app.audit.models import AuditAction, EntityType
+            AUDIT_SERVICE.record_audit(
+                actor=created_by,
+                action=AuditAction.JOB_CREATED,
+                entity_type=EntityType.JOB,
+                entity_id=saved_job.job_id,
+                new_value={
+                    "status": saved_job.status.value,
+                    "job_type": saved_job.job_type.value,
+                    "instrument_id": saved_job.instrument_id,
+                    "regulatory_profile_id": saved_job.regulatory_profile_id,
+                    "has_test_plan": saved_job.test_plan is not None,
+                },
+                metadata={
+                    "job_id": saved_job.job_id,
+                    "instrument_id": inst_id,
+                    "job_type": saved_job.job_type.value,
+                },
+                job_id=saved_job.job_id,
+            )
+        except Exception:
+            pass
+
         return {
             "success": True,
             "status_code": 201,
@@ -389,6 +416,23 @@ class TestJobService:
                 pass
 
         self.jobs.save(job)
+
+        # Emit audit event for inspector assignment
+        try:
+            from app.audit.service import AUDIT_SERVICE
+            from app.audit.models import AuditAction, EntityType
+            AUDIT_SERVICE.record_audit(
+                actor=assigned_by,
+                action=AuditAction.INSPECTOR_ASSIGNED,
+                entity_type=EntityType.JOB,
+                entity_id=job_id,
+                new_value={"status": job.status.value, "inspector": inspector_name, "inspector_id": inspector_id},
+                metadata={"job_id": job_id, "event": "inspector_assigned", "inspector_id": inspector_id, "inspector_name": inspector_name},
+                job_id=job_id,
+            )
+        except Exception:
+            pass
+
         return {
             "success": True,
             "status_code": 200,
@@ -656,6 +700,22 @@ class TestJobService:
             except JobStateTransitionError:
                 pass
 
+        # Emit audit event for validation
+        try:
+            from app.audit.service import AUDIT_SERVICE
+            from app.audit.models import AuditAction, EntityType
+            AUDIT_SERVICE.record_audit(
+                actor=user_id,
+                action=AuditAction.JOB_VALIDATED,
+                entity_type=EntityType.JOB,
+                entity_id=job.job_id,
+                new_value={"status": job.status.value, "valid": overall_valid},
+                metadata={"job_id": job.job_id, "validation_checks": len(checks), "all_passed": overall_valid},
+                job_id=job.job_id,
+            )
+        except Exception:
+            pass
+
         return {
             "success": True,
             "status_code": 200,
@@ -734,6 +794,23 @@ class TestJobService:
                 pass
 
         self.jobs.save(job)
+
+        # Emit audit event for test plan generation
+        try:
+            from app.audit.service import AUDIT_SERVICE
+            from app.audit.models import AuditAction, EntityType
+            AUDIT_SERVICE.record_audit(
+                actor=user_id,
+                action=AuditAction.TEST_PLAN_GENERATED,
+                entity_type=EntityType.JOB,
+                entity_id=job.job_id,
+                new_value={"status": job.status.value, "test_plan_reference": job.test_plan_reference},
+                metadata={"job_id": job.job_id, "event": "test_plan_generated", "test_plan_reference": job.test_plan_reference},
+                job_id=job.job_id,
+            )
+        except Exception:
+            pass
+
         return {
             "success": True,
             "status_code": 200,

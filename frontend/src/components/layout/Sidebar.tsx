@@ -1,8 +1,10 @@
-import { Archive, ClipboardCheck, LayoutDashboard } from 'lucide-react';
+import { Archive, Briefcase, ClipboardCheck, LayoutDashboard, Scale } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
 
 const navigation = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/instruments', label: 'Instruments', icon: Scale },
+  { to: '/jobs', label: 'Jobs', icon: Briefcase },
   { to: '/reports', label: 'Reports', icon: ClipboardCheck },
   { to: '/archive', label: 'Archive', icon: Archive },
 ];

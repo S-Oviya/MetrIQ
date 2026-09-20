@@ -279,6 +279,75 @@ def get_jobs_for_instrument(instrument_id: str = Path(...)):
     return {"success": True, "instrument_id": instrument_id, "count": len(jobs), "data": jobs}
 
 
+# =============================================================================
+# Start Execution — P3→P5 Bridge Convenience Endpoint
+# =============================================================================
+
+@_post("/test-jobs/{job_id}/start-execution")
+@_post("/jobs/{job_id}/start-execution")
+def start_job_execution(
+    job_id: str = Path(...),
+    payload: Optional[Dict[str, Any]] = Body(None),
+):
+    """
+    Convenience endpoint: advance a P3-assigned/validated job to IN_PROGRESS
+    so that the test-execution service can accept observations immediately.
+
+    This endpoint bridges the P3 lifecycle (VALIDATED → TEST_PLAN_GENERATED →
+    ASSIGNED → READY_FOR_TEST) into the P5 execution vocabulary (IN_PROGRESS).
+
+    If the job is already IN_PROGRESS the call is a no-op (idempotent).
+
+    Optional body fields:
+        user_id  (str) — actor to record in the audit trail
+        reason   (str) — free text reason / override note
+    """
+    payload = payload or {}
+    actor = str(payload.get("user_id") or payload.get("actor") or "SYSTEM").strip()
+    reason = str(payload.get("reason") or "Manual start-execution request.").strip()
+
+    from app.jobs.models import JobStatus
+    from app.workflow.service import WORKFLOW_SERVICE
+    from app.workflow.state_machine import WorkflowStateTransitionError
+
+    job_obj = TEST_JOB_SERVICE.get_job(job_id)
+    if not job_obj:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+
+    current_status = str(job_obj.get("status", "")).upper()
+    if current_status == JobStatus.IN_PROGRESS.value:
+        return {
+            "success": True,
+            "message": f"Job '{job_id}' is already IN_PROGRESS.",
+            "status": current_status,
+            "data": job_obj,
+        }
+
+    try:
+        updated = WORKFLOW_SERVICE.transition_job(
+            job_id=job_id,
+            target_state=JobStatus.IN_PROGRESS,
+            actor=actor,
+            reason=reason,
+        )
+        return {
+            "success": True,
+            "message": f"Job '{job_id}' advanced to IN_PROGRESS.",
+            "status": updated.status.value,
+            "data": updated.to_dict(),
+        }
+    except WorkflowStateTransitionError as exc:
+        raise HTTPException(status_code=409, detail={
+            "message": exc.message,
+            "error_code": exc.error_code,
+            "current_state": exc.current_state,
+            "target_state": exc.target_state,
+        })
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail={"message": f"Unexpected error: {exc}"})
+
+
+
 @_get("/test-jobs/{job_id}/regulatory-context")
 @_get("/jobs/{job_id}/regulatory-context")
 def get_job_regulatory_context(job_id: str = Path(...)):

@@ -720,7 +720,53 @@ Web Browser
 
 ---
 
-# 12. STEP 1 — INSTALL / CHECK GIT
+# 12. RUNNING THE APPLICATION
+
+After cloning the repository and installing dependencies, use these exact commands to start the application locally.
+
+## Backend (FastAPI)
+
+Open a Command Prompt and run:
+
+```cmd
+cd backend
+python -m uvicorn app.main:app --reload
+```
+
+The backend API will be available at `http://localhost:8000`.
+
+> **Important:** Always `cd backend` first. Do NOT use `python -m uvicorn backend.app.main:app --reload` — that form will fail.
+
+## Frontend (React + Vite)
+
+Open a **separate** Command Prompt window and run:
+
+```cmd
+cd frontend
+npm run dev
+```
+
+The frontend will be available at `http://localhost:5173` (or the port shown in the terminal).
+
+## Install dependencies first (if this is a fresh clone)
+
+Backend:
+
+```cmd
+cd backend
+pip install -r requirements.txt
+```
+
+Frontend:
+
+```cmd
+cd frontend
+npm install
+```
+
+---
+
+# 13. STEP 1 — INSTALL / CHECK GIT
 
 Open **Command Prompt**.
 

@@ -23,6 +23,10 @@ class AuditAction(str, Enum):
     JOB_CREATED = "JOB_CREATED"
     JOB_STATE_CHANGED = "JOB_STATE_CHANGED"
     JOB_UPDATED = "JOB_UPDATED"
+    JOB_VALIDATED = "JOB_VALIDATED"
+    TEST_PLAN_GENERATED = "TEST_PLAN_GENERATED"
+    INSPECTOR_ASSIGNED = "INSPECTOR_ASSIGNED"
+    REPORT_GENERATED = "REPORT_GENERATED"
 
     # Equipment / Test Standards Actions
     EQUIPMENT_CREATED = "EQUIPMENT_CREATED"
@@ -73,6 +77,14 @@ class AuditAction(str, Enum):
             return cls.REVIEW_REJECTED
         if clean in ("REVIEW_RETURN", "REVIEW_REWORK"):
             return cls.REVIEW_RETURNED_FOR_CORRECTION
+        if clean in ("JOB_VALIDATE", "JOB_VALIDATION", "VALIDATED"):
+            return cls.JOB_VALIDATED
+        if clean in ("GENERATE_TEST_PLAN", "TEST_PLAN_GENERATED_EVENT"):
+            return cls.TEST_PLAN_GENERATED
+        if clean in ("ASSIGN_INSPECTOR", "INSPECTOR_ASSIGNMENT"):
+            return cls.INSPECTOR_ASSIGNED
+        if clean in ("GENERATE_REPORT", "REPORT_GENERATION"):
+            return cls.REPORT_GENERATED
         raise ValueError(
             f"Invalid audit action '{val}'. Permitted actions: {[m.value for m in cls]}"
         )
