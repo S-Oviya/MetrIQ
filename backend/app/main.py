@@ -1,5 +1,6 @@
 """MetrIQ FastAPI application entry point."""
 
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,10 +18,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="MetrIQ API", version="0.1.0", lifespan=lifespan)
 
-# The Vite development server is a separate browser origin from the API.
+# --- CORS configuration ---
+# Always allow the Vite dev-server origins so local development keeps working.
+allowed_origins: list[str] = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+# In production, set FRONTEND_URL to the deployed frontend origin
+# (e.g. "https://metriq.example.com") so the browser can reach this API.
+_frontend_url = os.environ.get("FRONTEND_URL")
+if _frontend_url:
+    allowed_origins.append(_frontend_url.rstrip("/"))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
